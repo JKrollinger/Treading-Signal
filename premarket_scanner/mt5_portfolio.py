@@ -195,7 +195,7 @@ def fmt_opened(p: dict, cur: str, thai: bool) -> str:
     return text
 
 
-def fmt_closed(p: dict, close: dict | None, cur: str, balance: float | None, thai: bool) -> str:
+def fmt_closed(p: dict, close: dict | None, cur: str, balance: float | None, thai: bool, extra: str = "") -> str:
     side = trade_fmt.badge(p["type"])
     if close is None:
         return (f"📕 {EXIT} ไม้ {p['symbol']} {side} {p['volume']:g} ล็อต (เข้า {_price(p['price_open'], p['symbol'])}) ปิดแล้ว "
@@ -209,17 +209,35 @@ def fmt_closed(p: dict, close: dict | None, cur: str, balance: float | None, tha
         verdict = "กำไร" if close["profit"] > 0 else ("ขาดทุน" if close["profit"] < 0 else "เท่าทุน")
         text = (f"📕 {EXIT} ไม้ปิดแล้ว: {p['symbol']} {side} {p['volume']:g} ล็อต {ENTRY} เข้า {_price(p['price_open'], p['symbol'])} "
                 f"{EXIT} ปิด {_price(close['price'], p['symbol'])} โดย {reason} {verdict} {pnl} (ถือ {hours} ชม. {minutes} นาที)")
+        if extra:
+            text += "\n" + extra
         if balance is not None:
             text += f"\nยอดเงินตอนนี้ {balance:,.2f} {cur}"
     else:
         text = (f"CLOSED {EXIT} {p['symbol']} {side} {p['volume']:g} lots: {ENTRY} entry {_price(p['price_open'], p['symbol'])} "
                 f"{EXIT} exit {_price(close['price'], p['symbol'])} by {reason}, {pnl} (held {hours}h {minutes}m)")
+        if extra:
+            text += "\n" + extra
         if balance is not None:
             text += f"\nBalance now {balance:,.2f} {cur}"
     return text
 
 
 # Change detection ----------------------------------------------------------------
+def _stop_check_text(p: dict, close: dict | None, thai: bool) -> str:
+    """For a Stop Loss close: did the market reach the S/L, or only this broker's price?"""
+    from . import stop_check
+
+    try:
+        res = stop_check.check(p, close)
+    except Exception:  # noqa: BLE001 - the close alert must go out regardless
+        log.exception("stop check failed for %s", p.get("symbol"))
+        return ""
+    if res is None:
+        return ""
+    return stop_check.format_th(res) if thai else stop_check.format_en(res)
+
+
 def check_changes(send: bool = True, thai: bool | None = None) -> list[str]:
     """Detect positions opened or closed since the last check; return (and send) messages."""
     from . import telegram_notify as tg
@@ -247,7 +265,7 @@ def check_changes(send: bool = True, thai: bool | None = None) -> list[str]:
     for ticket, p in known.items():
         if ticket not in current:
             close = _close_details(mt5, int(ticket))
-            messages.append(fmt_closed(p, close, cur, snap["balance"], thai))
+            messages.append(fmt_closed(p, close, cur, snap["balance"], thai, _stop_check_text(p, close, thai)))
     state = {"known": current, "updated_at": snap["time"]}
     _save(state)
 
