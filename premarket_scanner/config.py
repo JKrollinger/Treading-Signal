@@ -1,0 +1,111 @@
+"""Scanner settings.
+
+Everything is read from environment variables (a ``.env`` file in the project
+root is loaded automatically). See ``.env.example`` for the full list.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").split("#")[0].strip()
+    return float(raw) if raw else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").split("#")[0].strip()
+    return int(float(raw)) if raw else default
+
+
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name, "").split("#")[0].strip()
+    return raw or default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").split("#")[0].strip().lower()
+    return raw in ("1", "true", "yes", "on") if raw else default
+
+
+# Scan criteria -----------------------------------------------------------------
+MIN_GAP_PCT: float = _env_float("MIN_GAP_PCT", 5.0)
+MIN_PRICE: float = _env_float("MIN_PRICE", 3.0)
+MIN_PREMARKET_VOLUME: int = _env_int("MIN_PREMARKET_VOLUME", 50_000)
+
+# Universe ----------------------------------------------------------------------
+UNIVERSE_SOURCE: str = _env_str("UNIVERSE_SOURCE", "yahoo").lower()  # "yahoo" | "file"
+UNIVERSE_MIN_AVG_VOLUME: int = _env_int("UNIVERSE_MIN_AVG_VOLUME", 50_000)
+MAX_UNIVERSE: int = _env_int("MAX_UNIVERSE", 8_000)
+WATCHLIST_FILE: Path = PROJECT_ROOT / _env_str("WATCHLIST_FILE", "watchlist.txt")
+
+# Schedule (all times HH:MM, US Eastern, weekdays) ---------------------------------
+MARKET_TZ = "America/New_York"
+SCAN_TIME_ET: str = _env_str("SCAN_TIME_ET", "08:30")        # first pre-market scan
+SCAN_END_ET: str = _env_str("SCAN_END_ET", "14:00")          # last pre-market scan
+SCAN_INTERVAL_MIN: int = _env_int("SCAN_INTERVAL_MIN", 30)   # minutes between scans
+STRATEGY_OFFSET_MIN: int = _env_int("STRATEGY_OFFSET_MIN", 5)  # strategy runs this long after each scan
+STRATEGY_END_ET: str = _env_str("STRATEGY_END_ET", "15:00")  # last strategy run
+PREMARKET_OPEN = "04:00"
+REGULAR_OPEN = "09:30"
+
+# Strategy scanner (Trend-join Long) ---------------------------------------------
+STRATEGY_DATA_SOURCE: str = _env_str("STRATEGY_DATA_SOURCE", "tradingview").lower()  # "tradingview" | "yahoo"
+TRADINGVIEW_SESSIONID: str = _env_str("TRADINGVIEW_SESSIONID", "")
+STRATEGY_START_ET: str = _env_str("STRATEGY_START_ET", "10:00")  # earliest time a signal is valid
+HOD_TOLERANCE_PCT: float = _env_float("HOD_TOLERANCE_PCT", 0.25)
+
+# Telegram ----------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN: str = _env_str("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: str = _env_str("TELEGRAM_CHAT_ID", "")
+REPORT_LANGUAGE: str = _env_str("REPORT_LANGUAGE", "th").lower()   # "th" plain Thai | "en"
+TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate headlines to Thai
+
+# Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
+SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
+# tradingview = real-time quotes from TradingView (symbols like OANDA:XAUUSD, FX:EURUSD, BITSTAMP:BTCUSD)
+# yahoo       = Yahoo Finance (symbols like EURUSD=X, GC=F, BTC-USD)
+SPECIAL_DATA_SOURCE: str = _env_str("SPECIAL_DATA_SOURCE", "tradingview").lower()
+_DEFAULT_WATCHLIST = {
+    "tradingview": "FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD",
+    "yahoo": "EURUSD=X,GBPUSD=X,USDJPY=X,USDTHB=X,GC=F,BTC-USD",
+}
+SPECIAL_WATCHLIST: list[str] = [
+    s.strip().upper()
+    for s in _env_str("SPECIAL_WATCHLIST", _DEFAULT_WATCHLIST.get(SPECIAL_DATA_SOURCE, "")).split(",")
+    if s.strip()
+]
+
+# TradingView webhook receiver (TradingView alert -> this bot -> Telegram) ---------
+TV_WEBHOOK_ENABLED: bool = _env_bool("TV_WEBHOOK_ENABLED", True)
+TV_WEBHOOK_BIND: str = _env_str("TV_WEBHOOK_BIND", "127.0.0.1")   # local only; expose via a tunnel
+TV_WEBHOOK_PORT: int = _env_int("TV_WEBHOOK_PORT", 8787)
+TV_WEBHOOK_SECRET: str = _env_str("TV_WEBHOOK_SECRET", "")        # required in the URL (?key=) or JSON "secret"
+# Watch mode: check every few minutes, alert immediately on a new entry signal
+SPECIAL_WATCH_ENABLED: bool = _env_bool("SPECIAL_WATCH_ENABLED", True)
+SPECIAL_WATCH_INTERVAL_MIN: int = _env_int("SPECIAL_WATCH_INTERVAL_MIN", 5)
+ATR_PERIOD: int = _env_int("ATR_PERIOD", 14)              # days used for the average daily range
+STOP_ATR_MULT: float = _env_float("STOP_ATR_MULT", 1.0)   # stop = entry - this x ATR
+TARGET_R_MULT: float = _env_float("TARGET_R_MULT", 2.0)   # target = entry + this x (entry - stop)
+STALE_QUOTE_MIN: int = _env_int("STALE_QUOTE_MIN", 30)    # ignore quotes older than this (market closed)
+
+# News --------------------------------------------------------------------------
+BENZINGA_API_KEY: str = _env_str("BENZINGA_API_KEY", "")
+NEWS_LOOKBACK_HOURS: int = _env_int("NEWS_LOOKBACK_HOURS", 48)
+
+# Paths -------------------------------------------------------------------------
+OUTPUT_DIR: Path = PROJECT_ROOT / _env_str("OUTPUT_DIR", "output")
+DATA_DIR: Path = PROJECT_ROOT / "data"
+
+# Networking --------------------------------------------------------------------
+HTTP_TIMEOUT = 30
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)

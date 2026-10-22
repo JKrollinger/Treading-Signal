@@ -1,0 +1,7 @@
+# Used only when UNIVERSE_SOURCE=file in .env. One ticker per line; "#" starts a comment.
+# With the default UNIVERSE_SOURCE=yahoo every US stock above the price/volume floor is scanned instead.
+AAPL
+TSLA
+NVDA
+AMD
+PLTR

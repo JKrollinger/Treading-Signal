@@ -1,0 +1,71 @@
+//@version=6
+// Trend-join Long - companion indicator for the Signal Bot.
+//
+// Same rules as the bot's strategy scanner, evaluated bar by bar on an intraday chart
+// (1-5 minutes). Works on stocks (enable "Extended trading hours" so pre-market bars
+// exist) and on 24-hour markets such as forex, spot gold and bitcoin (no pre-market, no
+// time gate).
+//
+//   1. price above yesterday's daily high
+//   2. yesterday's close above the 200-day SMA
+//   3. price above today's pre-market high (stocks) and above the high of day so far
+//
+// It also computes the bot's trade plan: stop = close - 1 x ATR(14, daily),
+// target = close + 2 x (close - stop). Create an alert on "Trend-join Long signal",
+// choose "Webhook URL" and paste the bot's URL (see README, section TradingView). The
+// alert message below is already JSON the bot understands; replace CHANGE_ME with your
+// TV_WEBHOOK_SECRET or, easier, put ?key=SECRET in the webhook URL and leave it.
+indicator("Trend-join Long", shorttitle="TJ Long", overlay=true)
+
+tz          = "America/New_York"
+useTimeGate = input.bool(true, "Stocks only: signals from the start time onwards")
+startHour   = input.int(10,  "Earliest signal hour (ET)",   minval=0, maxval=23)
+startMinute = input.int(0,   "Earliest signal minute",      minval=0, maxval=59)
+hodTolPct   = input.float(0.0, "High-of-day tolerance %",   minval=0, step=0.05,
+     tooltip="0 = price must exceed the high of all earlier bars today")
+atrLen      = input.int(14,  "ATR length (days)", minval=1)
+stopMult    = input.float(1.0, "Stop = entry - ATR x", minval=0.1, step=0.1)
+targetR     = input.float(2.0, "Target = entry + R x", minval=0.5, step=0.5)
+
+// Yesterday's completed daily bar, the 200-day SMA and the ATR as of yesterday's close.
+// [1] + lookahead_on returns the previous day's values without repainting.
+yHigh  = request.security(syminfo.tickerid, "D", high[1],                lookahead=barmerge.lookahead_on)
+yClose = request.security(syminfo.tickerid, "D", close[1],               lookahead=barmerge.lookahead_on)
+sma200 = request.security(syminfo.tickerid, "D", ta.sma(close, 200)[1],  lookahead=barmerge.lookahead_on)
+atrD   = request.security(syminfo.tickerid, "D", ta.atr(atrLen)[1],      lookahead=barmerge.lookahead_on)
+
+// Pre-market high (stocks) and high of day, reset when the calendar day changes (ET).
+var float pmHigh = na
+var float hod    = na
+newDay = ta.change(dayofmonth(time, tz)) != 0
+if newDay
+    pmHigh := na
+    hod    := na
+if session.ispremarket
+    pmHigh := na(pmHigh) ? high : math.max(pmHigh, high)
+priorHod = hod                       // high of day before this bar
+if session.ismarket
+    hod := na(hod) ? high : math.max(hod, high)
+
+isStock    = syminfo.type == "stock"
+afterStart = hour(time, tz) > startHour or (hour(time, tz) == startHour and minute(time, tz) >= startMinute)
+gateOk     = not (useTimeGate and isStock) or afterStart
+
+c1 = close > yHigh
+c2 = yClose > sma200
+c3 = (na(pmHigh) or close > pmHigh) and (na(priorHod) or close >= priorHod * (1 - hodTolPct / 100))
+signal = session.ismarket and gateOk and c1 and c2 and c3
+
+stopLvl   = close - stopMult * atrD
+targetLvl = close + targetR * (close - stopLvl)
+
+plot(yHigh,     "Yesterday high",  color=color.orange, linewidth=1)
+plot(pmHigh,    "Pre-market high", color=color.blue,   linewidth=1)
+plot(stopLvl,   "Stop",   display=display.none)
+plot(targetLvl, "Target", display=display.none)
+plotshape(signal, "Trend-join Long", style=shape.triangleup, location=location.belowbar,
+     color=color.green, size=size.small)
+bgcolor(signal ? color.new(color.green, 85) : na)
+
+alertcondition(signal, "Trend-join Long signal",
+     '{"secret":"CHANGE_ME","signal":"Trend-join Long","ticker":"{{ticker}}","exchange":"{{exchange}}","price":"{{close}}","stop":"{{plot("Stop")}}","target":"{{plot("Target")}}","interval":"{{interval}}","time":"{{timenow}}"}')
