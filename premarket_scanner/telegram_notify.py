@@ -56,6 +56,13 @@ def credentials() -> tuple[str, str]:
     return token, chat_id
 
 
+def extra_chat_ids() -> list[str]:
+    """Groups/channels that receive reports and signals (not system messages), from .env."""
+    load_dotenv(config.PROJECT_ROOT / ".env", override=True)
+    raw = (os.getenv("TELEGRAM_EXTRA_CHAT_IDS") or "").split("#")[0]
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
 def is_configured() -> bool:
     token, chat_id = credentials()
     return bool(token and chat_id)
@@ -92,19 +99,29 @@ def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
     return chunks
 
 
-def send_message(text: str) -> bool:
+def send_message(text: str, admin_only: bool = False) -> bool:
+    """Send to the owner chat and, unless ``admin_only``, to every extra group/channel.
+
+    System messages (tunnel URL with the secret, failure notes) must stay ``admin_only``.
+    Returns True when the owner chat received the message.
+    """
     token, chat_id = credentials()
     if not token or not chat_id:
         log.warning("Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing); message not sent")
         return False
-    try:
-        for chunk in split_message(text):
-            api_call("sendMessage", token, chat_id=chat_id, text=chunk, disable_web_page_preview=True)
-    except Exception as exc:  # noqa: BLE001
-        log.error("Telegram send failed: %s", exc)
-        return False
-    log.info("Telegram message sent (%d chars)", len(text))
-    return True
+    targets = [chat_id] + ([] if admin_only else [c for c in extra_chat_ids() if c != chat_id])
+    ok_owner = False
+    for target in targets:
+        try:
+            for chunk in split_message(text):
+                api_call("sendMessage", token, chat_id=target, text=chunk, disable_web_page_preview=True)
+            if target == chat_id:
+                ok_owner = True
+        except Exception as exc:  # noqa: BLE001
+            log.error("Telegram send to %s failed: %s", target, exc)
+    if ok_owner:
+        log.info("Telegram message sent (%d chars) to %d chat(s)", len(text), len(targets))
+    return ok_owner
 
 
 # Report formatting -------------------------------------------------------------

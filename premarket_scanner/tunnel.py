@@ -77,7 +77,7 @@ def notify_url(public_url: str) -> None:
             full or public_url,
             "Paste it into the alert's Webhook URL field; it changes every time the bot restarts.",
         ])
-    tg.send_message(text)
+    tg.send_message(text, admin_only=True)   # contains the secret: owner chat only
 
 
 class QuickTunnel:

@@ -350,6 +350,23 @@ The scheduler re-reads the Telegram settings before every send, so no restart is
 after step 3. Until the bot is configured the scans still run and save their JSON files;
 the log says the report was not sent.
 
+### Sharing the reports with friends (group or channel)
+
+Friends cannot join your private chat with the bot. Create a Telegram **group** (members
+can talk) or **channel** (one-way broadcast), add **@your_bot** to it (for a channel make
+it an administrator with "Post messages"), send any message there once, then run:
+
+```bash
+.venv\Scripts\python telegram_setup.py --add-chat
+```
+
+It finds the newest group/channel the bot was added to, stores its id in
+`TELEGRAM_EXTRA_CHAT_IDS`, and posts a test message there. Scan reports and signal alerts
+go to your chat **and** every extra chat; system messages (the webhook URL with its
+secret, failure notes) stay in your private chat only. Invite friends with the
+group's/channel's invite link (Telegram: group info > Add members / Invite link). Repeat
+`--add-chat` for more chats, or edit the comma-separated list in `.env`.
+
 # Scheduling
 
 The schedule is defined in **US Eastern time** so it stays correct across US

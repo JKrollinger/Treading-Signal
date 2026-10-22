@@ -21,8 +21,11 @@ from premarket_scanner import config
 from premarket_scanner import telegram_notify as tg
 
 
-def discover_chat_id(token: str) -> tuple[str, str] | None:
-    """Newest chat that has messaged the bot, as (chat_id, description)."""
+def discover_chat_id(token: str, kinds: tuple[str, ...] | None = None) -> tuple[str, str] | None:
+    """Newest chat that has messaged (or added) the bot, as (chat_id, description).
+
+    ``kinds`` limits the chat types, e.g. ("group", "supergroup", "channel").
+    """
     updates = tg.api_call("getUpdates", token, limit=100)
     found: tuple[str, str] | None = None
     for upd in updates or []:
@@ -30,10 +33,38 @@ def discover_chat_id(token: str) -> tuple[str, str] | None:
         chat = msg.get("chat") or (upd.get("my_chat_member") or {}).get("chat") or {}
         if chat.get("id") is None:
             continue
+        if kinds and chat.get("type") not in kinds:
+            continue
         name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) \
             or chat.get("username") or "?"
         found = (str(chat["id"]), f"{chat.get('type', 'chat')} '{name}'")
     return found
+
+
+def add_extra_chat(token: str, send_test: bool = True) -> int:
+    """Find the newest group/channel the bot was added to and append it to TELEGRAM_EXTRA_CHAT_IDS."""
+    found = discover_chat_id(token, kinds=("group", "supergroup", "channel"))
+    if not found:
+        print("No group or channel found yet. Add the bot to the group (or as an admin of the channel), "
+              "send one message there, then run again.")
+        return 1
+    chat_id, desc = found
+    existing = tg.extra_chat_ids()
+    if chat_id in existing or chat_id == tg.credentials()[1]:
+        print(f"{desc} (id {chat_id}) is already receiving reports.")
+    else:
+        save_env_value("TELEGRAM_EXTRA_CHAT_IDS", ",".join(existing + [chat_id]))
+        print(f"Added {desc} (id {chat_id}) to TELEGRAM_EXTRA_CHAT_IDS in .env")
+    if send_test:
+        text = ("Signal Bot เชื่อมต่อกับแชทนี้แล้ว จะได้รับรายงานสแกนและสัญญาณซื้อเหมือนแชทหลัก"
+                if tg.is_thai() else "Signal Bot connected: this chat now receives the scan reports and signals.")
+        try:
+            tg.api_call("sendMessage", token, chat_id=chat_id, text=text)
+            print("Test message sent to that chat.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Could not post there: {exc}. For a channel the bot must be an administrator with 'Post messages'.")
+            return 1
+    return 0
 
 
 def save_env_value(key: str, value: str) -> None:
@@ -119,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="ask for the bot token in this terminal (hidden input) and save it to .env first")
     parser.add_argument("--token-from-clipboard", action="store_true",
                         help="take the bot token from the clipboard (copied from @BotFather) and save it to .env")
+    parser.add_argument("--add-chat", action="store_true",
+                        help="add the newest group/channel the bot was added to as an extra report recipient")
     parser.add_argument("--no-test", action="store_true", help="do not send the test message")
     args = parser.parse_args(argv)
 
@@ -133,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Create a bot with @BotFather (/newbot), then put the token in .env as TELEGRAM_BOT_TOKEN=...")
         print("Or run:  python telegram_setup.py --set-token --save   and paste it when asked.")
         return 1
+    if args.add_chat:
+        return add_extra_chat(token, send_test=not args.no_test)
     try:
         me = tg.api_call("getMe", token)
     except Exception as exc:  # noqa: BLE001

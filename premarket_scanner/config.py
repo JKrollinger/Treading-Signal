@@ -63,7 +63,8 @@ HOD_TOLERANCE_PCT: float = _env_float("HOD_TOLERANCE_PCT", 0.25)
 
 # Telegram ----------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN: str = _env_str("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID: str = _env_str("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID: str = _env_str("TELEGRAM_CHAT_ID", "")              # owner: gets everything
+TELEGRAM_EXTRA_CHAT_IDS: str = _env_str("TELEGRAM_EXTRA_CHAT_IDS", "")  # groups/channels: reports + signals only
 REPORT_LANGUAGE: str = _env_str("REPORT_LANGUAGE", "th").lower()   # "th" plain Thai | "en"
 TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate headlines to Thai
 
