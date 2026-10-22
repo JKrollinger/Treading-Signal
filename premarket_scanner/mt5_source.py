@@ -190,8 +190,25 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
     return out
 
 
+def server_offset_hours(symbol: str = "EURUSD") -> float:
+    """Broker server clock minus UTC, in hours (estimated from a fresh tick)."""
+    mt5 = _mt5()
+    if not connect():
+        return 0.0
+    if _server_offset is None:
+        mt5.symbol_select(symbol, True)
+        tick = _fresh_tick(mt5, symbol)
+        if tick is not None and tick.time:
+            _update_server_offset(float(tick.time))
+    return (_server_offset or 0.0) / 3600.0
+
+
 def hourly_history(symbol: str, days: int = 730) -> pd.DataFrame:
-    """H1 bars as a DataFrame with open/high/low/close and a UTC index (for the backtest)."""
+    """H1 bars as a DataFrame with open/high/low/close.
+
+    The index is the broker's server time (so a calendar day matches the broker's daily
+    bars); ``df.attrs['tz_offset_hours']`` holds server minus UTC for session filters.
+    """
     mt5 = _mt5()
     if not connect():
         return pd.DataFrame()
@@ -202,5 +219,7 @@ def hourly_history(symbol: str, days: int = 730) -> pd.DataFrame:
     if rates is None or len(rates) == 0:
         return pd.DataFrame()
     df = pd.DataFrame(rates)
-    df.index = pd.to_datetime(df["time"], unit="s", utc=True)
-    return df[["open", "high", "low", "close", "tick_volume"]].rename(columns={"tick_volume": "volume"})
+    df.index = pd.to_datetime(df["time"], unit="s")          # naive = server time
+    df = df[["open", "high", "low", "close", "tick_volume"]].rename(columns={"tick_volume": "volume"})
+    df.attrs["tz_offset_hours"] = server_offset_hours(symbol)
+    return df

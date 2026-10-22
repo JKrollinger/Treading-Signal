@@ -1,19 +1,27 @@
-"""Backtest of the Trend-join Long rules on hourly bars.
+"""Backtest of the Trend-join Long rules on hourly bars, version 1 and version 2.
 
-Rules, evaluated bar by bar (one trade per symbol per day, no new entry while a trade
-is open):
+Version 1 (the live rules):
 
-* yesterday's close above the 200-day SMA (long-term uptrend)
-* the bar closes above yesterday's high
-* that close is at the high of the day so far (within ``hod_tol_pct``), i.e. a breakout
-* entry at that bar's close; stop = entry - ``stop_atr_mult`` x ATR(14, daily, as of
-  yesterday); target = entry + ``target_r`` x (entry - stop)
-* exit at the stop or target (if a bar touches both, the stop is assumed first), or at the
-  close of the last bar after ``max_hold_days`` trading days
-* a flat round-trip cost of ``cost_pct`` percent is charged to every trade
+* yesterday's close above the 200-day SMA
+* a bar closes above yesterday's high while at the high of the day (within ``hod_tol_pct``)
+* entry at that close; stop = entry - ``stop_atr_mult`` x ATR(14, daily, as of yesterday);
+  target = entry + ``target_r`` x risk; exit at stop/target or after ``max_hold_days``
 
-"Day" means the calendar day in the data's own time zone (broker server time for MT5,
-the exchange zone for Yahoo), so the levels match what the live scanner sees.
+Version 2 adds switchable layers (each ``None``/``False`` = off):
+
+* regime filter: daily ADX(14) >= ``adx_min``; yesterday's ATR(14) not above
+  ``atr_ratio_max`` x its 100-day median; 200-day SMA rising over ``sma_slope_days``
+* trend exit: Chandelier trailing stop ``trail_atr_mult`` x ATR below the highest high
+  since entry (stop only ever rises); optional half position taken at ``partial_r`` R;
+  with a trailing stop the fixed target is off unless ``target_r`` is kept
+* time filter: entries only between ``session_utc`` hours (UTC) and never on Friday at or
+  after ``friday_cutoff_utc``
+* news filter: no entries in a window around US non-farm payrolls (first Friday of the
+  month, 12:00-14:00 UTC) and FOMC decisions (17:30-20:00 UTC on the scheduled dates)
+
+One trade per symbol per day, no new entry while a trade is open, a flat round-trip cost
+of ``cost_pct`` percent per trade. "Day" is the calendar day of the data's own clock
+(broker server time for MT5, the exchange zone for Yahoo).
 """
 from __future__ import annotations
 
@@ -21,6 +29,7 @@ import logging
 import math
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from datetime import date, timedelta
 from statistics import mean
 
 import numpy as np
@@ -30,16 +39,36 @@ from . import config
 
 log = logging.getLogger(__name__)
 
+# FOMC decision days (second day of each scheduled meeting), used by the news filter
+FOMC_DATES = {
+    date(2024, 1, 31), date(2024, 3, 20), date(2024, 5, 1), date(2024, 6, 12),
+    date(2024, 7, 31), date(2024, 9, 18), date(2024, 11, 7), date(2024, 12, 18),
+    date(2025, 1, 29), date(2025, 3, 19), date(2025, 5, 7), date(2025, 6, 18),
+    date(2025, 7, 30), date(2025, 9, 17), date(2025, 10, 29), date(2025, 12, 10),
+    date(2026, 1, 28), date(2026, 3, 18), date(2026, 4, 29), date(2026, 6, 17),
+    date(2026, 7, 29), date(2026, 9, 16), date(2026, 10, 28), date(2026, 12, 9),
+}
+
 
 @dataclass
 class Params:
+    name: str = "v1"
     stop_atr_mult: float = config.STOP_ATR_MULT
-    target_r: float = config.TARGET_R_MULT
+    target_r: float | None = config.TARGET_R_MULT
     hod_tol_pct: float = config.HOD_TOLERANCE_PCT
     max_hold_days: int = 5
     cost_pct: float = 0.03          # round-trip cost in percent of the entry price
     atr_period: int = config.ATR_PERIOD
     sma_period: int = 200
+    # version 2 layers
+    adx_min: float | None = None
+    atr_ratio_max: float | None = None
+    sma_slope_days: int | None = None
+    trail_atr_mult: float | None = None
+    partial_r: float | None = None
+    session_utc: tuple[int, int] | None = None     # entry hours [start, end) in UTC
+    friday_cutoff_utc: int | None = None
+    news_blackout: bool = False
 
 
 @dataclass
@@ -49,29 +78,47 @@ class Trade:
     entry_time: str
     entry: float
     stop: float
-    target: float
+    target: float | None
     exit_time: str
     exit_price: float
-    exit_reason: str      # stop | target | time | open
+    exit_reason: str      # stop | target | trail | time | open
     r_multiple: float     # result in units of initial risk, after costs
     pct_return: float     # percent of entry, after costs
     bars_held: int
+    partial_taken: bool = False
 
 
 @dataclass
 class SymbolResult:
     symbol: str
     source: str
+    variant: str
     bars: int
     first_bar: str
     last_bar: str
     days_tested: int
     trades: list[Trade] = field(default_factory=list)
     metrics: dict = field(default_factory=dict)
+    skipped: dict = field(default_factory=dict)   # why candidate days produced no entry
 
     def to_json(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
+
+
+# Variants -------------------------------------------------------------------------------
+def variants() -> list[Params]:
+    base = dict(stop_atr_mult=config.STOP_ATR_MULT, target_r=config.TARGET_R_MULT,
+                hod_tol_pct=config.HOD_TOLERANCE_PCT, max_hold_days=5, cost_pct=0.03)
+    regime = dict(adx_min=20.0, atr_ratio_max=2.0, sma_slope_days=20)
+    trail = dict(trail_atr_mult=3.0, partial_r=1.0, target_r=None, max_hold_days=10)
+    timef = dict(session_utc=(7, 20), friday_cutoff_utc=15, news_blackout=True)
+    return [
+        Params(name="v1 (กฎเดิม)", **base),
+        Params(name="v2-regime (กรองสภาพตลาด)", **{**base, **regime}),
+        Params(name="v2-trail (exit ตามแนวโน้ม)", **{**base, **trail}),
+        Params(name="v2-time (กรองเวลา/ข่าว)", **{**base, **timef}),
+        Params(name="v2-all (ทั้งหมด)", **{**base, **regime, **trail, **timef}),
+    ]
 
 
 # Data -----------------------------------------------------------------------------
@@ -90,10 +137,18 @@ def load_mt5_hourly(symbol: str, days: int = 730) -> pd.DataFrame:
     from . import mt5_source
 
     df = mt5_source.hourly_history(symbol, days)
-    return df[["open", "high", "low", "close"]] if not df.empty else df
+    if df.empty:
+        return df
+    out = df[["open", "high", "low", "close"]].copy()
+    out.attrs["tz_offset_hours"] = df.attrs.get("tz_offset_hours", 0.0)
+    return out
 
 
-# Engine -------------------------------------------------------------------------------
+# Indicators --------------------------------------------------------------------------
+def _wilder(series: pd.Series, n: int) -> pd.Series:
+    return series.ewm(alpha=1.0 / n, adjust=False).mean()
+
+
 def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
     dates = bars.index.date
     g = bars.groupby(dates)
@@ -105,22 +160,56 @@ def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
         axis=1,
     ).max(axis=1)
     daily["atr"] = tr.rolling(p.atr_period).mean()
-    for col in ("high", "close", "sma", "atr"):
-        daily[f"y_{col}"] = daily[col].shift(1)
+    daily["atr_med100"] = daily["atr"].rolling(100).median()
+    # ADX (Wilder)
+    up = daily["high"].diff()
+    down = -daily["low"].diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    atr_w = _wilder(tr, 14)
+    plus_di = 100 * _wilder(plus_dm, 14) / atr_w
+    minus_di = 100 * _wilder(minus_dm, 14) / atr_w
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    daily["adx"] = _wilder(dx.fillna(0.0), 14)
+    if p.sma_slope_days:
+        daily["sma_slope"] = daily["sma"] - daily["sma"].shift(p.sma_slope_days)
+    for col in ("high", "close", "sma", "atr", "adx", "atr_med100", "sma_slope"):
+        if col in daily:
+            daily[f"y_{col}"] = daily[col].shift(1)
     return daily
 
 
+def _first_friday(d: date) -> bool:
+    return d.weekday() == 4 and d.day <= 7
+
+
+def in_news_blackout(d: date, utc_hour: int) -> bool:
+    if _first_friday(d) and 12 <= utc_hour < 14:          # US non-farm payrolls
+        return True
+    if d in FOMC_DATES and 17 <= utc_hour < 20:            # FOMC decision + press conference
+        return True
+    return False
+
+
+# Engine -------------------------------------------------------------------------------
 def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> SymbolResult:
     bars = bars.sort_index()
     if len(bars) < 24 * 30:
-        return SymbolResult(symbol, source, len(bars), "", "", 0, [], {"trades": 0, "note": "not enough bars"})
+        return SymbolResult(symbol, source, p.name, len(bars), "", "", 0, [], {"trades": 0, "note": "not enough bars"})
     daily = daily_levels(bars, p)
     date_pos = {d: i for i, d in enumerate(daily.index)}
     bar_dates = bars.index.date
+    if bars.index.tz is not None:
+        utc_hours = bars.index.tz_convert("UTC").hour.to_numpy()
+    else:
+        offset = float(bars.attrs.get("tz_offset_hours", 0.0))
+        utc_hours = ((bars.index.hour - offset) % 24).astype(int).to_numpy()
+    weekdays = bars.index.weekday.to_numpy()
     highs, lows, closes = bars["high"].to_numpy(), bars["low"].to_numpy(), bars["close"].to_numpy()
     n = len(bars)
 
     trades: list[Trade] = []
+    skipped: Counter = Counter()
     cur_day = None
     hod = -math.inf
     y = None
@@ -138,45 +227,81 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
             if row is not None and not any(pd.isna(row[k]) for k in ("y_high", "y_close", "y_sma", "y_atr")):
                 y = row
                 days_tested += 1
-            day_ok = y is not None and float(y["y_close"]) > float(y["y_sma"])
+            day_ok = False
+            if y is not None:
+                if float(y["y_close"]) <= float(y["y_sma"]):
+                    skipped["below_sma200"] += 1
+                elif p.adx_min is not None and (pd.isna(y["y_adx"]) or float(y["y_adx"]) < p.adx_min):
+                    skipped["adx_low"] += 1
+                elif p.atr_ratio_max is not None and not pd.isna(y["y_atr_med100"]) and \
+                        float(y["y_atr"]) > p.atr_ratio_max * float(y["y_atr_med100"]):
+                    skipped["volatility_extreme"] += 1
+                elif p.sma_slope_days and (pd.isna(y.get("y_sma_slope", np.nan)) or float(y["y_sma_slope"]) <= 0):
+                    skipped["sma_falling"] += 1
+                else:
+                    day_ok = True
         hod = max(hod, highs[i])
         if i <= open_until or traded_today or not day_ok:
             continue
         c = closes[i]
         if not (c > float(y["y_high"]) and c >= hod * (1.0 - p.hod_tol_pct / 100.0)):
             continue
+        h = int(utc_hours[i])
+        if p.session_utc and not (p.session_utc[0] <= h < p.session_utc[1]):
+            skipped["outside_session"] += 1
+            continue
+        if p.friday_cutoff_utc is not None and weekdays[i] == 4 and h >= p.friday_cutoff_utc:
+            skipped["friday_late"] += 1
+            continue
+        if p.news_blackout and in_news_blackout(d, h):
+            skipped["news_blackout"] += 1
+            continue
 
         entry = float(c)
-        stop = entry - p.stop_atr_mult * float(y["y_atr"])
+        atr = float(y["y_atr"])
+        stop = entry - p.stop_atr_mult * atr
         risk = entry - stop
         if stop <= 0 or risk <= 0:
             continue
-        target = entry + p.target_r * risk
+        target = entry + p.target_r * risk if p.target_r else None
         last_day_pos = date_pos[d] + p.max_hold_days
+        highest = entry
+        partial_price = None
         exit_price, exit_reason, j_exit = None, "open", n - 1
         for j in range(i + 1, n):
             if date_pos.get(bar_dates[j], 10**9) > last_day_pos:
                 exit_price, exit_reason, j_exit = float(closes[j - 1]), "time", j - 1
                 break
             if lows[j] <= stop:
-                exit_price, exit_reason, j_exit = stop, "stop", j
+                exit_price, exit_reason, j_exit = stop, "trail" if (p.trail_atr_mult and stop > entry - risk) else "stop", j
                 break
-            if highs[j] >= target:
+            if target is not None and highs[j] >= target:
                 exit_price, exit_reason, j_exit = target, "target", j
                 break
+            if p.partial_r and partial_price is None and highs[j] >= entry + p.partial_r * risk:
+                partial_price = entry + p.partial_r * risk
+            if p.trail_atr_mult:
+                highest = max(highest, highs[j])
+                stop = max(stop, highest - p.trail_atr_mult * atr)
         if exit_price is None:
             exit_price = float(closes[-1])
+
         cost_r = (p.cost_pct / 100.0) * entry / risk
-        r = (exit_price - entry) / risk - cost_r
-        pct = (exit_price / entry - 1.0) * 100.0 - p.cost_pct
+        if partial_price is not None:
+            r = 0.5 * (partial_price - entry) / risk + 0.5 * (exit_price - entry) / risk - cost_r
+            pct = 0.5 * (partial_price / entry - 1.0) * 100.0 + 0.5 * (exit_price / entry - 1.0) * 100.0 - p.cost_pct
+        else:
+            r = (exit_price - entry) / risk - cost_r
+            pct = (exit_price / entry - 1.0) * 100.0 - p.cost_pct
         trades.append(Trade(
-            symbol, str(d), bars.index[i].isoformat(), entry, stop, target,
+            symbol, str(d), bars.index[i].isoformat(), entry, entry - risk, target,
             bars.index[j_exit].isoformat(), exit_price, exit_reason, float(r), float(pct), int(j_exit - i),
+            partial_price is not None,
         ))
         traded_today, open_until = True, j_exit
 
-    return SymbolResult(symbol, source, n, bars.index[0].isoformat(), bars.index[-1].isoformat(),
-                        days_tested, trades, compute_metrics(trades))
+    return SymbolResult(symbol, source, p.name, n, bars.index[0].isoformat(), bars.index[-1].isoformat(),
+                        days_tested, trades, compute_metrics(trades), dict(skipped))
 
 
 def compute_metrics(trades: list[Trade]) -> dict:
@@ -224,8 +349,8 @@ def _f(v, nd=2) -> str:
 
 def format_table(results: list[SymbolResult], overall: dict, p: Params, source: str) -> str:
     lines = [
-        f"TREND-JOIN LONG BACKTEST  source={source}  stop={p.stop_atr_mult}xATR{p.atr_period}  "
-        f"target={p.target_r}R  hold<={p.max_hold_days}d  tol={p.hod_tol_pct}%  cost={p.cost_pct}%",
+        f"TREND-JOIN LONG BACKTEST [{p.name}]  source={source}  stop={p.stop_atr_mult}xATR{p.atr_period}  "
+        f"target={p.target_r}R  trail={p.trail_atr_mult}  hold<={p.max_hold_days}d  cost={p.cost_pct}%",
         f"{'SYMBOL':<16}{'DAYS':>6}{'TRADES':>8}{'WIN%':>7}{'AVG R':>8}{'TOTAL R':>9}{'PF':>7}{'MAXDD R':>9}  EXITS",
     ]
     lines.append("-" * 96)
@@ -248,6 +373,27 @@ def format_table(results: list[SymbolResult], overall: dict, p: Params, source: 
     return "\n".join(lines)
 
 
+def format_comparison(by_variant: dict[str, tuple[list[SymbolResult], dict]], source: str) -> str:
+    names = list(by_variant)
+    symbols = [r.symbol for r in by_variant[names[0]][0]]
+    lines = [f"COMPARISON  source={source}   (trades | win% | avg R | total R | PF | maxDD R)"]
+    header = f"{'SYMBOL':<10}" + "".join(f"{n[:22]:>24}" for n in names)
+    lines.append(header)
+    lines.append("-" * len(header))
+    for i, s in enumerate(symbols + ["ALL"]):
+        cells = []
+        for n in names:
+            results, overall = by_variant[n]
+            m = overall if s == "ALL" else results[i].metrics
+            if not m.get("trades"):
+                cells.append(f"{'no trades':>24}")
+            else:
+                cells.append(f"{m['trades']:>4}|{m['win_rate_pct']:>3.0f}|{m['avg_r']:>5.2f}|{m['total_r']:>6.1f}|"
+                             f"{_f(m['profit_factor'], 2):>4}|{m['max_drawdown_r']:>5.1f}")
+        lines.append(f"{s:<10}" + "".join(f"{c:>24}" for c in cells))
+    return "\n".join(lines)
+
+
 def verdict_th(avg_r: float, pf: float, trades: int) -> str:
     if trades < 20:
         return "จำนวนเทรดน้อยเกินไปที่จะสรุป"
@@ -263,10 +409,9 @@ def verdict_th(avg_r: float, pf: float, trades: int) -> str:
 def format_message_th(results: list[SymbolResult], overall: dict, p: Params, source: str, names: dict[str, str]) -> str:
     src = {"yahoo": "Yahoo Finance รายชั่วโมง", "mt5": "MT5 ของโบรกเกอร์ รายชั่วโมง"}.get(source, source)
     lines = [
-        f"📊 ผลทดสอบย้อนหลังกฎ Trend-join Long (ข้อมูล {src} ประมาณ 2 ปี)",
-        f"กฎ: ปิดเมื่อวานเหนือเส้นค่าเฉลี่ย 200 วัน + ราคาทะลุจุดสูงสุดเมื่อวานและเป็นจุดสูงสุดของวัน | "
-        f"ตัดขาดทุน {p.stop_atr_mult:g} ATR | เป้าหมาย {p.target_r:g} เท่าของความเสี่ยง | ถือไม่เกิน {p.max_hold_days} วัน | "
-        f"หักค่าธรรมเนียม {p.cost_pct}% ต่อเทรด",
+        f"📊 ผลทดสอบย้อนหลังกฎ Trend-join Long [{p.name}] (ข้อมูล {src} ประมาณ 2 ปี)",
+        f"ตัดขาดทุน {p.stop_atr_mult:g} ATR | " + (f"เลื่อนจุดตัดขาดทุนตาม {p.trail_atr_mult:g} ATR" if p.trail_atr_mult else f"เป้าหมาย {p.target_r:g}R")
+        + f" | ถือไม่เกิน {p.max_hold_days} วัน | ค่าธรรมเนียม {p.cost_pct}% ต่อเทรด",
         "",
     ]
     for r in results:
@@ -277,8 +422,7 @@ def format_message_th(results: list[SymbolResult], overall: dict, p: Params, sou
             continue
         lines.append(
             f"• {label}: {m['trades']} เทรด ชนะ {m['win_rate_pct']:.0f}% เฉลี่ย {m['avg_r']:+.2f}R ต่อเทรด "
-            f"(กำไร/ขาดทุนรวม {m['total_r']:+.1f}R หรือ {m['total_pct']:+.1f}% ของเงินต่อไม้) "
-            f"ขาดทุนสะสมลึกสุด {m['max_drawdown_r']:.1f}R"
+            f"(รวม {m['total_r']:+.1f}R) ขาดทุนสะสมลึกสุด {m['max_drawdown_r']:.1f}R"
         )
     o = overall
     if o.get("trades"):
@@ -287,8 +431,43 @@ def format_message_th(results: list[SymbolResult], overall: dict, p: Params, sou
             f"รวมทุกตัว: {o['trades']} เทรด ชนะ {o['win_rate_pct']:.0f}% เฉลี่ย {o['avg_r']:+.2f}R ต่อเทรด "
             f"profit factor {_f(o['profit_factor'])} ขาดทุนสะสมลึกสุด {o['max_drawdown_r']:.1f}R",
             f"สรุป: {verdict_th(o['avg_r'], o['profit_factor'], o['trades'])}",
-            "",
-            "R = ระยะเสี่ยงต่อไม้ (ราคาเข้าถึงจุดตัดขาดทุน) เช่น +0.20R ต่อเทรด หมายถึงเสี่ยง 1,000 บาทต่อไม้ ได้กำไรเฉลี่ย 200 บาทต่อเทรด",
-            "ข้อจำกัด: ไม่รวมสเปรดจริง/สลิปเพจ เกินกว่าค่าธรรมเนียมที่ตั้งไว้ และผลในอดีตไม่รับประกันอนาคต",
         ]
+    return "\n".join(lines)
+
+
+def format_comparison_th(by_variant: dict[str, tuple[list[SymbolResult], dict]], source: str,
+                         names: dict[str, str]) -> str:
+    src = {"yahoo": "Yahoo", "mt5": "MT5 ของโบรกเกอร์"}.get(source, source)
+    variant_names = list(by_variant)
+    base_name = variant_names[0]
+    lines = [f"📊 เทียบกฎเดิม (v1) กับกฎเวอร์ชัน 2 (ข้อมูล {src} รายชั่วโมง ประมาณ 2 ปี)",
+             "ตัวเลข = เทรด / ชนะ% / กำไรเฉลี่ยต่อเทรด (R) / กำไรรวม (R) / ขาดทุนสะสมลึกสุด (R)", ""]
+    for i, sym in enumerate([r.symbol for r in by_variant[base_name][0]]):
+        lines.append(f"• {names.get(sym, sym)}")
+        for n in variant_names:
+            m = by_variant[n][0][i].metrics
+            if not m.get("trades"):
+                lines.append(f"   {n}: ไม่มีเทรด")
+            else:
+                lines.append(f"   {n}: {m['trades']} / {m['win_rate_pct']:.0f}% / {m['avg_r']:+.2f}R / "
+                             f"{m['total_r']:+.1f}R / {m['max_drawdown_r']:.1f}R")
+    lines.append("")
+    lines.append("รวมทุกตัว")
+    best_name, best_avg = None, -math.inf
+    for n in variant_names:
+        o = by_variant[n][1]
+        if not o.get("trades"):
+            lines.append(f"   {n}: ไม่มีเทรด")
+            continue
+        lines.append(f"   {n}: {o['trades']} / {o['win_rate_pct']:.0f}% / {o['avg_r']:+.2f}R / {o['total_r']:+.1f}R / "
+                     f"{o['max_drawdown_r']:.1f}R / PF {_f(o['profit_factor'])}")
+        if o["trades"] >= 20 and o["avg_r"] > best_avg:
+            best_name, best_avg = n, o["avg_r"]
+    v1 = by_variant[base_name][1]
+    lines.append("")
+    if best_name and best_name != base_name and v1.get("trades"):
+        lines.append(f"สรุป: {best_name} ให้กำไรเฉลี่ยต่อเทรดดีที่สุด ({best_avg:+.2f}R เทียบกับกฎเดิม {v1['avg_r']:+.2f}R)")
+    elif v1.get("trades"):
+        lines.append(f"สรุป: กฎเดิมยังดีที่สุด ({v1['avg_r']:+.2f}R ต่อเทรด) ส่วนเพิ่มของ v2 ไม่ช่วยในช่วงที่ทดสอบ")
+    lines.append("ข้อจำกัด: ตัวกรองข่าวครอบคลุมเฉพาะ NFP และ FOMC, ไม่รวมสเปรดจริง/สลิปเพจ, และผลในอดีตไม่รับประกันอนาคต")
     return "\n".join(lines)

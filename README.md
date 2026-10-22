@@ -198,6 +198,23 @@ drawdown in R, exit reasons), writes `output/backtest_trend_join_<source>_<date>
 and, with `--send`, posts a plain-Thai summary to Telegram. "R" is the initial risk per
 trade (entry minus stop). Real spreads and slippage are not modelled beyond the flat cost.
 
+### Version 2 rules and the comparison
+
+`backtest_compare.py` runs the same history through five variants and reports them side
+by side (`output/backtest_compare_<source>_<date>.json`, Thai summary with `--send`):
+
+| Variant | What changes |
+| --- | --- |
+| v1 | the live rules above |
+| v2-regime | only trade when the daily ADX(14) is at least 20, yesterday's ATR is no more than 2x its 100-day median, and the 200-day SMA rose over the last 20 days |
+| v2-trail | no fixed target: a Chandelier trailing stop 3 x ATR below the highest high since entry (never lowered), half the position taken at +1R, hold up to 10 days |
+| v2-time | entries only 07:00-20:00 UTC (London/New York), none on Friday from 15:00 UTC, none in the US payrolls window (first Friday, 12:00-14:00 UTC) or around FOMC decisions (17:30-20:00 UTC on meeting days) |
+| v2-all | all of the above |
+
+Each variant also reports why candidate days were skipped (ADX too low, volatility
+extreme, outside the session, news blackout, ...). The news filter is an approximation
+built from recurring events only; live mode can be extended with an economic calendar.
+
 ## Running it on TradingView charts
 
 `tradingview/trend_join_long.pine` is a Pine Script v6 indicator with the same three rules.
