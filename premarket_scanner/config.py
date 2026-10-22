@@ -87,6 +87,9 @@ MT5_LOGIN: int = _env_int("MT5_LOGIN", 0)
 MT5_PASSWORD: str = _env_str("MT5_PASSWORD", "")
 MT5_SERVER: str = _env_str("MT5_SERVER", "")
 MT5_TIMEOUT_MS: int = _env_int("MT5_TIMEOUT_MS", 10_000)
+# Read-only portfolio report (your MT5 account: open positions, floating P/L, closes)
+PORTFOLIO_ENABLED: bool = _env_bool("PORTFOLIO_ENABLED", True)
+PORTFOLIO_TO_GROUP: bool = _env_bool("PORTFOLIO_TO_GROUP", False)   # false = owner chat only
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
     for s in _env_str("SPECIAL_WATCHLIST", _DEFAULT_WATCHLIST.get(SPECIAL_DATA_SOURCE, "")).split(",")

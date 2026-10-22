@@ -118,17 +118,24 @@ def run_strategy() -> None:
 def run_watch() -> None:
     messages = special_watch.run_watch(send=True)
     log.info("Scanner C watch: %d alert(s)", len(messages))
+    if config.PORTFOLIO_ENABLED:
+        try:
+            from premarket_scanner import mt5_portfolio
+            changes = mt5_portfolio.check_changes(send=True)
+            if changes:
+                log.info("MT5 portfolio: %d change(s) reported", len(changes))
+        except Exception:  # noqa: BLE001
+            log.exception("MT5 portfolio check failed")
 
 
 def notify(job_name: str, error: Exception | None = None) -> None:
     """Send the combined report for today (plus a failure note when a job crashed)."""
-    text = tg.build_report_for(datetime.now(ET).date())
     if not tg.is_configured():
         log.warning("Telegram not configured; report not sent. Run telegram_setup.py --save")
         return
     if error is not None:
         tg.send_message(tg.failure_line(job_name, error), admin_only=True)   # owner only
-    tg.send_message(text)
+    tg.send_report_for(datetime.now(ET).date())
 
 
 def run_job(job: Job) -> None:

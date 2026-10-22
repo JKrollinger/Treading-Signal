@@ -180,6 +180,17 @@ TradingView, then Yahoo, mapping the broker symbol to the equivalent
 The MetaQuotes-Demo server, for example, has spot gold and forex but no crypto CFDs, so
 bitcoin keeps coming from TradingView there.
 
+## Account report and position alerts (read-only)
+
+With `PORTFOLIO_ENABLED=true` the owner's copy of every scheduled report ends with an
+**[MT5 account]** section: balance, equity, floating P/L, each open position with its
+S/L, T/P and profit (and whether it matches a bot signal), and the trades closed today.
+Groups do not receive it unless `PORTFOLIO_TO_GROUP=true`. Every 5 minutes the bot also
+compares the open positions with the previous check and sends, to the owner chat only,
+a "📗" note when a position appears (warning if it has no stop-loss) and a "📕" note
+when one disappears, with the close price, the reason (stop loss, take profit, manual)
+and the realised profit. The bot never places, modifies or closes orders.
+
 ## Backtest of the Trend-join Long rules
 
 `backtest_trend_join.py` replays the rules on hourly history: yesterday's close above the
@@ -503,6 +514,8 @@ overwrites that day's file.
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |
 | `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`), `mt5` (your broker via MetaTrader 5, symbols like `XAUUSD`) or `yahoo` (symbols like `GC=F`). |
 | `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
+| `PORTFOLIO_ENABLED` | `true` | Account section in the owner's report and open/close position alerts. |
+| `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
 | `SPECIAL_WATCHLIST` | `FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD` | Symbols for Scanner C, in the style of the chosen source. |
 | `TV_WEBHOOK_ENABLED` | `true` | Start the TradingView webhook receiver with the scheduler. |
 | `TV_WEBHOOK_BIND` / `TV_WEBHOOK_PORT` | `127.0.0.1` / `8787` | Where the receiver listens (expose it with a tunnel). |
@@ -586,6 +599,8 @@ mt5_probe.py            check the MetaTrader 5 connection and list broker symbol
 backtest_trend_join.py  replay the Trend-join Long rules on hourly history (Yahoo or MT5)
 premarket_scanner/tunnel.py       Cloudflare quick tunnel supervisor used by the scheduler
 premarket_scanner/mt5_source.py   MetaTrader 5 prices, levels and hourly history (read-only)
+premarket_scanner/mt5_portfolio.py account snapshot + position opened/closed alerts (read-only)
+premarket_scanner/filters.py      session / Friday / news filters shared by live watch and backtest
 premarket_scanner/backtest.py     backtest engine and reports
 output/                 daily JSON files (premarket_scan_<date>.json, trend_join_<date>.json)
 ```

@@ -99,29 +99,34 @@ def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
     return chunks
 
 
-def send_message(text: str, admin_only: bool = False) -> bool:
+def send_message(text: str, admin_only: bool = False, extras_only: bool = False) -> bool:
     """Send to the owner chat and, unless ``admin_only``, to every extra group/channel.
 
-    System messages (tunnel URL with the secret, failure notes) must stay ``admin_only``.
-    Returns True when the owner chat received the message.
+    System messages (tunnel URL with the secret, failure notes, the account report) must
+    stay ``admin_only``; ``extras_only`` sends to the groups/channels but not the owner.
+    Returns True when every targeted chat received the message.
     """
     token, chat_id = credentials()
     if not token or not chat_id:
         log.warning("Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing); message not sent")
         return False
-    targets = [chat_id] + ([] if admin_only else [c for c in extra_chat_ids() if c != chat_id])
-    ok_owner = False
+    extras = [c for c in extra_chat_ids() if c != chat_id]
+    if extras_only:
+        targets = extras
+    else:
+        targets = [chat_id] + ([] if admin_only else extras)
+    if not targets:
+        return True
+    ok = True
     for target in targets:
         try:
             for chunk in split_message(text):
                 api_call("sendMessage", token, chat_id=target, text=chunk, disable_web_page_preview=True)
-            if target == chat_id:
-                ok_owner = True
         except Exception as exc:  # noqa: BLE001
+            ok = False
             log.error("Telegram send to %s failed: %s", target, exc)
-    if ok_owner:
-        log.info("Telegram message sent (%d chars) to %d chat(s)", len(text), len(targets))
-    return ok_owner
+    log.info("Telegram message sent (%d chars) to %d chat(s)%s", len(text), len(targets), "" if ok else " with errors")
+    return ok
 
 
 # Report formatting -------------------------------------------------------------
@@ -486,7 +491,19 @@ def section_c(thai: bool) -> list[str]:
     return lines
 
 
-def build_report(pre: dict | None, strat: dict | None) -> str:
+def section_d(thai: bool) -> list[str]:
+    """Read-only MT5 account section (owner's copy of the report)."""
+    from . import mt5_portfolio
+
+    try:
+        snap = mt5_portfolio.snapshot()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("portfolio snapshot failed: %s", exc)
+        snap = None
+    return mt5_portfolio.format_section(snap, thai)
+
+
+def build_report(pre: dict | None, strat: dict | None, include_portfolio: bool = False) -> str:
     thai = is_thai()
     parts: list[list[str]] = []
     if thai:
@@ -496,6 +513,8 @@ def build_report(pre: dict | None, strat: dict | None) -> str:
         parts += [section_a(pre), section_b(strat)]
     if config.SPECIAL_ENABLED:
         parts.append(section_c(thai))
+    if include_portfolio and config.PORTFOLIO_ENABLED:
+        parts.append(section_d(thai))
     if thai:
         parts.append([DISCLAIMER_TH])
     lines: list[str] = []
@@ -506,12 +525,20 @@ def build_report(pre: dict | None, strat: dict | None) -> str:
     return "\n".join(lines)
 
 
-def build_report_for(scan_date: date, output_dir: Path | None = None) -> str:
+def build_report_for(scan_date: date, output_dir: Path | None = None, include_portfolio: bool = False) -> str:
     pre = _load(report.output_path(scan_date.isoformat(), output_dir))
     strat = _load(strategy.strategy_file(scan_date, output_dir))
-    return build_report(pre, strat)
+    return build_report(pre, strat, include_portfolio=include_portfolio)
 
 
 def send_report_for(scan_date: date, output_dir: Path | None = None) -> bool:
-    """Send today's combined report (both sections) to Telegram."""
-    return send_message(build_report_for(scan_date, output_dir))
+    """Send today's combined report: owner gets the account section, groups do not."""
+    pre = _load(report.output_path(scan_date.isoformat(), output_dir))
+    strat = _load(strategy.strategy_file(scan_date, output_dir))
+    show_portfolio = config.PORTFOLIO_ENABLED
+    if config.PORTFOLIO_TO_GROUP or not show_portfolio:
+        return send_message(build_report(pre, strat, include_portfolio=show_portfolio))
+    ok = send_message(build_report(pre, strat, include_portfolio=True), admin_only=True)
+    if extra_chat_ids():
+        ok = send_message(build_report(pre, strat, include_portfolio=False), extras_only=True) and ok
+    return ok
