@@ -121,12 +121,15 @@ def tradingview_equivalent(symbol: str) -> str | None:
 @dataclass
 class TradePlan:
     entry: float
-    stop: float
-    target: float
+    stop: float            # initial stop = entry - STOP_ATR_MULT x ATR
+    target: float          # partial-profit level = entry + PARTIAL_R x risk (half the position)
     atr: float
     risk_pct: float        # distance to the stop, % of entry
-    reward_pct: float      # distance to the target, % of entry
+    reward_pct: float      # distance to the partial level, % of entry
     breakout_level: float  # yesterday's high; falling back below it weakens the setup
+    trail_atr_mult: float = config.TRAIL_ATR_MULT
+    partial_r: float = config.PARTIAL_R
+    max_hold_days: int = config.MAX_HOLD_DAYS
 
 
 @dataclass
@@ -323,7 +326,7 @@ def build_plan(price: float, atr: float | None, breakout_level: float | None) ->
     stop = price - config.STOP_ATR_MULT * atr
     if stop <= 0:
         return None
-    target = price + config.TARGET_R_MULT * (price - stop)
+    target = price + config.PARTIAL_R * (price - stop)
     return TradePlan(
         entry=price, stop=stop, target=target, atr=atr,
         risk_pct=(price - stop) / price * 100.0,

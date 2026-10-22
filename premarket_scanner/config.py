@@ -75,10 +75,10 @@ SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
 # mt5         = your broker's prices through the MetaTrader 5 terminal running on this PC
 #               (broker symbol names such as XAUUSD, EURUSD, BTCUSD)
 SPECIAL_DATA_SOURCE: str = _env_str("SPECIAL_DATA_SOURCE", "tradingview").lower()
-_DEFAULT_WATCHLIST = {
-    "tradingview": "FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD",
-    "yahoo": "EURUSD=X,GBPUSD=X,USDJPY=X,USDTHB=X,GC=F,BTC-USD",
-    "mt5": "EURUSD,GBPUSD,USDJPY,XAUUSD,BTCUSD",
+_DEFAULT_WATCHLIST = {   # GBPUSD dropped: it lost money under every rule variant in the backtests
+    "tradingview": "OANDA:XAUUSD,FX:EURUSD,FX:USDJPY,FX_IDC:USDTHB,BITSTAMP:BTCUSD",
+    "yahoo": "GC=F,EURUSD=X,USDJPY=X,USDTHB=X,BTC-USD",
+    "mt5": "XAUUSD,EURUSD,USDJPY,USDTHB,BTCUSD",
 }
 
 # MetaTrader 5 (optional; leave login fields empty to attach to the already logged-in terminal)
@@ -106,8 +106,14 @@ TUNNEL_NOTIFY: bool = _env_bool("TUNNEL_NOTIFY", True)            # Telegram mes
 SPECIAL_WATCH_ENABLED: bool = _env_bool("SPECIAL_WATCH_ENABLED", True)
 SPECIAL_WATCH_INTERVAL_MIN: int = _env_int("SPECIAL_WATCH_INTERVAL_MIN", 5)
 ATR_PERIOD: int = _env_int("ATR_PERIOD", 14)              # days used for the average daily range
-STOP_ATR_MULT: float = _env_float("STOP_ATR_MULT", 1.0)   # stop = entry - this x ATR
-TARGET_R_MULT: float = _env_float("TARGET_R_MULT", 2.0)   # target = entry + this x (entry - stop)
+STOP_ATR_MULT: float = _env_float("STOP_ATR_MULT", 1.0)   # initial stop = entry - this x ATR
+TARGET_R_MULT: float = _env_float("TARGET_R_MULT", 2.0)   # fixed target used by the v1 backtest only
+# Live exit (v2-trail): half off at PARTIAL_R, the rest trails TRAIL_ATR_MULT x ATR below the
+# highest price since entry (the stop only ever rises), closed after MAX_HOLD_DAYS trading days
+PARTIAL_R: float = _env_float("PARTIAL_R", 1.0)
+TRAIL_ATR_MULT: float = _env_float("TRAIL_ATR_MULT", 3.0)
+MAX_HOLD_DAYS: int = _env_int("MAX_HOLD_DAYS", 10)
+TRAIL_NOTIFY_ATR: float = _env_float("TRAIL_NOTIFY_ATR", 0.5)   # alert when the stop rises this many ATR
 STALE_QUOTE_MIN: int = _env_int("STALE_QUOTE_MIN", 30)    # ignore quotes older than this (market closed)
 
 # News --------------------------------------------------------------------------

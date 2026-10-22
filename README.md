@@ -312,12 +312,17 @@ The moment a symbol newly passes the Trend-join rules it sends an alert like:
 ถ้าราคากลับลงต่ำกว่า $4,100 ก่อนถึงเป้าหมาย ถือว่าสัญญาณอ่อนลง จะแจ้งให้ทราบ
 ```
 
-The plan is mechanical: stop-loss = entry minus `STOP_ATR_MULT` x the 14-day average true
-range (ATR, the typical one-day swing), target = entry plus `TARGET_R_MULT` x the distance
-to the stop. The signal is then followed for the rest of the day and one more alert goes
-out when the price hits the stop ("⛔"), reaches the target ("✅") or falls back below
-yesterday's high ("⚠️", the setup has weakened). One signal per symbol per US trading day.
-State: `data/special_watch_state.json`; the day's signals: `output/special_signals_<date>.json`.
+The plan follows the exit that won the backtest comparison (v2-trail): initial stop =
+entry minus `STOP_ATR_MULT` x the 14-day ATR; half the position is taken at
+`PARTIAL_R` R ("✅" alert); the rest trails a stop `TRAIL_ATR_MULT` x ATR below the
+highest price since entry, which only ever rises ("🔼" alert each time it climbs by
+`TRAIL_NOTIFY_ATR` x ATR); the signal closes when the price reaches the current stop
+("⛔", with the combined result in R), after `MAX_HOLD_DAYS` trading days ("⏱"), and an
+early "⚠️" warns once if the price falls back below yesterday's high before the partial.
+Signals are followed across days; one new signal per symbol per US trading day and none
+while that symbol is still open. State: `data/special_watch_state.json`; records touched
+today: `output/special_signals_<date>.json`. GBP/USD is no longer in the default list
+because it lost money under every rule variant tested.
 
 Manual checks:
 
@@ -498,8 +503,12 @@ overwrites that day's file.
 | `SPECIAL_WATCH_ENABLED` | `true` | Watch mode: entry alerts every few minutes, all day. |
 | `SPECIAL_WATCH_INTERVAL_MIN` | `5` | Minutes between watch checks. |
 | `ATR_PERIOD` | `14` | Days in the average true range used for the stop. |
-| `STOP_ATR_MULT` | `1.0` | Stop = entry - this x ATR. |
-| `TARGET_R_MULT` | `2.0` | Target = entry + this x (entry - stop). |
+| `STOP_ATR_MULT` | `1.0` | Initial stop = entry - this x ATR. |
+| `PARTIAL_R` | `1.0` | Take half the position at this many R. |
+| `TRAIL_ATR_MULT` | `3.0` | Trailing stop distance below the highest price, in ATR. |
+| `MAX_HOLD_DAYS` | `10` | Close what is left after this many trading days. |
+| `TRAIL_NOTIFY_ATR` | `0.5` | Alert when the trailing stop rises by this many ATR. |
+| `TARGET_R_MULT` | `2.0` | Fixed target used only by the v1 backtest. |
 | `STALE_QUOTE_MIN` | `30` | Skip symbols whose quote is older than this (market closed). |
 
 ## How a scan works

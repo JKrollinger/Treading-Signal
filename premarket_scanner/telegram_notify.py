@@ -404,20 +404,26 @@ def special_fmt(v, currency: str) -> str:
 def _signal_text(it, rec: dict | None, thai: bool) -> str:
     """Status of the Trend-join signal for one Scanner C symbol, with the trade plan."""
     cur = it.currency
+    fp = lambda v: special_fmt(v, cur)  # noqa: E731
     if rec:
-        plan = _plan_text(rec["entry"], rec["stop"], rec["target"], cur, thai)
-        when = datetime.fromisoformat(rec["triggered_at"]).astimezone(BKK if thai else ET).strftime("%H:%M")
+        partial = rec.get("partial_level", rec.get("target"))
+        when = datetime.fromisoformat(rec["triggered_at"]).astimezone(BKK if thai else ET)
+        when_txt = when.strftime("%d/%m %H:%M") if thai else when.strftime("%m-%d %H:%M")
         if thai:
+            plan = f"เข้า {fp(rec['entry'])} | ตัดขาดทุนตอนนี้ {fp(rec['stop'])} | ปิดครึ่งที่ {fp(partial)}"
             return {
-                "active": f"ผ่าน ({plan}, สัญญาณเมื่อ {when} น. ไทย)",
-                "weakened": f"อ่อนลง ราคาหลุดใต้จุดสูงสุดเมื่อวานแล้ว ({plan}, สัญญาณเมื่อ {when} น. ไทย)",
-                "stopped": f"ถึงจุดตัดขาดทุนแล้ว ({plan}, สัญญาณเมื่อ {when} น. ไทย)",
-                "target": f"ถึงเป้าหมายแล้ว ({plan}, สัญญาณเมื่อ {when} น. ไทย)",
+                "active": f"ผ่าน กำลังถืออยู่ ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
+                "partial": f"ปิดครึ่งไม้แล้ว ส่วนที่เหลือถือตามแนวโน้ม ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
+                "weakened": f"อ่อนลง ราคาหลุดใต้จุดสูงสุดเมื่อวาน ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
+                "stopped": f"ถึงจุดตัดขาดทุนแล้ว ผล {rec.get('result_r') or 0:+.2f}R (สัญญาณเมื่อ {when_txt} น. ไทย)",
+                "expired": f"ครบกำหนดถือแล้ว ผล {rec.get('result_r') or 0:+.2f}R (สัญญาณเมื่อ {when_txt} น. ไทย)",
             }.get(rec["status"], rec["status"])
-        return f"{rec['status'].upper()} ({plan}, since {when} ET)"
+        plan = f"entry {fp(rec['entry'])} | stop now {fp(rec['stop'])} | half off at {fp(partial)}"
+        return f"{rec['status'].upper()} ({plan}, since {when_txt} ET)"
     if it.signal:
         if it.plan:
-            plan = _plan_text(it.plan.entry, it.plan.stop, it.plan.target, cur, thai)
+            plan = (f"เข้า {fp(it.plan.entry)} | ตัดขาดทุน {fp(it.plan.stop)} | ปิดครึ่งที่ {fp(it.plan.target)}"
+                    if thai else f"entry {fp(it.plan.entry)} | stop {fp(it.plan.stop)} | half off at {fp(it.plan.target)}")
             return f"ผ่าน ({plan})" if thai else f"YES ({plan})"
         return "ผ่าน" if thai else "YES"
     if thai:
