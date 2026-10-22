@@ -36,18 +36,9 @@ import numpy as np
 import pandas as pd
 
 from . import config
+from .filters import FOMC_DATES, in_recurring_blackout  # noqa: F401 - shared with the live watch
 
 log = logging.getLogger(__name__)
-
-# FOMC decision days (second day of each scheduled meeting), used by the news filter
-FOMC_DATES = {
-    date(2024, 1, 31), date(2024, 3, 20), date(2024, 5, 1), date(2024, 6, 12),
-    date(2024, 7, 31), date(2024, 9, 18), date(2024, 11, 7), date(2024, 12, 18),
-    date(2025, 1, 29), date(2025, 3, 19), date(2025, 5, 7), date(2025, 6, 18),
-    date(2025, 7, 30), date(2025, 9, 17), date(2025, 10, 29), date(2025, 12, 10),
-    date(2026, 1, 28), date(2026, 3, 18), date(2026, 4, 29), date(2026, 6, 17),
-    date(2026, 7, 29), date(2026, 9, 16), date(2026, 10, 28), date(2026, 12, 9),
-}
 
 
 @dataclass
@@ -179,16 +170,8 @@ def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
     return daily
 
 
-def _first_friday(d: date) -> bool:
-    return d.weekday() == 4 and d.day <= 7
-
-
 def in_news_blackout(d: date, utc_hour: int) -> bool:
-    if _first_friday(d) and 12 <= utc_hour < 14:          # US non-farm payrolls
-        return True
-    if d in FOMC_DATES and 17 <= utc_hour < 20:            # FOMC decision + press conference
-        return True
-    return False
+    return in_recurring_blackout(d, utc_hour)
 
 
 # Engine -------------------------------------------------------------------------------

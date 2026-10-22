@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, special
+from . import config, filters, special
 from .special import SpecialItem, fmt_price
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def day_file(day: date) -> Path:
 
 def _upgrade_record(rec: dict) -> dict:
     """Bring a record written by the earlier fixed-target watcher up to the v2-trail shape."""
-    if all(k in rec for k in ("initial_stop", "highest", "expires_on", "risk", "atr")):
+    if "entry" not in rec or all(k in rec for k in ("initial_stop", "highest", "expires_on", "risk", "atr")):
         return rec
     entry = float(rec.get("entry") or 0.0)
     stop = float(rec.get("stop") or 0.0)
@@ -89,13 +89,20 @@ def save_state(state: dict[str, dict], path: Path | None = None) -> None:
 
 
 def visible_records(state: dict[str, dict], day: date) -> dict[str, dict]:
-    """Records worth showing: still being followed, or finished today."""
+    """Signal records worth showing: still being followed, or finished today."""
     out = {}
     for s, r in state.items():
+        if s.startswith("hold:") or "entry" not in r:
+            continue
         if r.get("status") in TRACKING or r.get("date") == day.isoformat() or \
                 (r.get("closed_at") or "").startswith(day.isoformat()):
             out[s] = r
     return out
+
+
+def holds_today(state: dict[str, dict], day: date) -> dict[str, dict]:
+    """Symbols whose qualifying setup was held back today by the time/news filter."""
+    return {k[5:]: v for k, v in state.items() if k.startswith("hold:") and v.get("date") == day.isoformat()}
 
 
 def today_records(state: dict[str, dict], day: date) -> dict[str, dict]:   # backwards compatible name
@@ -247,6 +254,14 @@ def fmt_expired(rec: dict, price: float, thai: bool) -> str:
             f"close at {fp(price)}, combined result {r:+.2f}R")
 
 
+def fmt_held(it: SpecialItem, reason: str, thai: bool) -> str:
+    c = it.currency
+    if thai:
+        return (f"⏸ {it.name} ({it.symbol}): เข้าเงื่อนไข Trend-join ที่ราคา {fmt_price(it.price, c)} "
+                f"แต่ยังไม่นับเป็นสัญญาณ เพราะ{reason} (แจ้งครั้งเดียวต่อวัน จะนับใหม่เมื่อพ้นช่วงนี้และราคายังเข้าเงื่อนไข)")
+    return f"HELD {it.name} ({it.symbol}) at {fmt_price(it.price, c)}: {reason}"
+
+
 def fmt_weakened(rec: dict, price: float, thai: bool) -> str:
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
@@ -294,6 +309,14 @@ def run_watch(
             if rec is not None and rec.get("date") == today.isoformat():
                 continue
             if it.signal and it.plan:
+                reason = filters.check_new_signal(it.symbol, now.astimezone(timezone.utc))
+                if reason:
+                    key = f"hold:{it.symbol}"
+                    if state.get(key, {}).get("date") != today.isoformat():
+                        state[key] = {"date": today.isoformat(), "reason": reason, "at": stamp, "symbol": it.symbol}
+                        messages.append(fmt_held(it, reason, thai))
+                    log.info("%s: signal held back: %s", it.symbol, reason)
+                    continue
                 rec = _record(it, now)
                 state[it.symbol] = rec
                 messages.append(fmt_new(rec, thai))

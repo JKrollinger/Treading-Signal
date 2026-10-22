@@ -115,6 +115,15 @@ TRAIL_ATR_MULT: float = _env_float("TRAIL_ATR_MULT", 3.0)
 MAX_HOLD_DAYS: int = _env_int("MAX_HOLD_DAYS", 10)
 TRAIL_NOTIFY_ATR: float = _env_float("TRAIL_NOTIFY_ATR", 0.5)   # alert when the stop rises this many ATR
 STALE_QUOTE_MIN: int = _env_int("STALE_QUOTE_MIN", 30)    # ignore quotes older than this (market closed)
+# Time / news filter for new signals (backtest: helps gold, hurts the currency pairs)
+TIME_FILTER_SYMBOLS: list[str] = [
+    s.strip().upper() for s in _env_str("TIME_FILTER_SYMBOLS", "XAUUSD,GOLD,GC=F").split(",") if s.strip()
+]
+SESSION_UTC_START: int = _env_int("SESSION_UTC_START", 7)    # London open
+SESSION_UTC_END: int = _env_int("SESSION_UTC_END", 20)       # late New York
+FRIDAY_CUTOFF_UTC: int = _env_int("FRIDAY_CUTOFF_UTC", 15)   # no new signals on Friday from this hour
+NEWS_BLACKOUT_MIN: int = _env_int("NEWS_BLACKOUT_MIN", 30)   # minutes before/after a high-impact release
+NEWS_CALENDAR_ENABLED: bool = _env_bool("NEWS_CALENDAR_ENABLED", True)   # ForexFactory weekly calendar
 
 # News --------------------------------------------------------------------------
 BENZINGA_API_KEY: str = _env_str("BENZINGA_API_KEY", "")

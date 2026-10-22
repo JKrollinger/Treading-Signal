@@ -324,6 +324,16 @@ while that symbol is still open. State: `data/special_watch_state.json`; records
 today: `output/special_signals_<date>.json`. GBP/USD is no longer in the default list
 because it lost money under every rule variant tested.
 
+Time and news filter (gold only by default, `TIME_FILTER_SYMBOLS`): a new gold signal is
+only accepted between `SESSION_UTC_START` and `SESSION_UTC_END` (07:00-20:00 UTC, the
+London/New York sessions), never on Friday from `FRIDAY_CUTOFF_UTC` (15:00 UTC), and never
+within `NEWS_BLACKOUT_MIN` (30) minutes of a high-impact US release. Releases come from
+ForexFactory's weekly calendar (`NEWS_CALENDAR_ENABLED`) plus the fixed payrolls/FOMC rule
+used in the backtest. A setup that qualifies while held back produces one "⏸" note per
+day and is picked up as soon as the window reopens if it still qualifies. The backtest
+showed this layer helping gold (+0.43R to +0.55R per trade) and hurting the currency
+pairs, which is why it is not applied to them.
+
 Manual checks:
 
 ```bash
@@ -509,6 +519,11 @@ overwrites that day's file.
 | `MAX_HOLD_DAYS` | `10` | Close what is left after this many trading days. |
 | `TRAIL_NOTIFY_ATR` | `0.5` | Alert when the trailing stop rises by this many ATR. |
 | `TARGET_R_MULT` | `2.0` | Fixed target used only by the v1 backtest. |
+| `TIME_FILTER_SYMBOLS` | `XAUUSD,GOLD,GC=F` | Symbols the session/news filter applies to. |
+| `SESSION_UTC_START` / `SESSION_UTC_END` | `7` / `20` | Hours (UTC) during which new filtered signals are accepted. |
+| `FRIDAY_CUTOFF_UTC` | `15` | No new filtered signals on Friday from this hour (UTC). |
+| `NEWS_BLACKOUT_MIN` | `30` | Minutes before/after a high-impact US release with no new filtered signals. |
+| `NEWS_CALENDAR_ENABLED` | `true` | Read this week's high-impact events from ForexFactory. |
 | `STALE_QUOTE_MIN` | `30` | Skip symbols whose quote is older than this (market closed). |
 
 ## How a scan works

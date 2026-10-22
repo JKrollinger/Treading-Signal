@@ -401,10 +401,13 @@ def special_fmt(v, currency: str) -> str:
     return special.fmt_price(v, currency)
 
 
-def _signal_text(it, rec: dict | None, thai: bool) -> str:
+def _signal_text(it, rec: dict | None, thai: bool, hold: dict | None = None) -> str:
     """Status of the Trend-join signal for one Scanner C symbol, with the trade plan."""
     cur = it.currency
     fp = lambda v: special_fmt(v, cur)  # noqa: E731
+    if rec is None and hold and it.signal:
+        return (f"เข้าเงื่อนไขแต่ยังไม่นับเป็นสัญญาณ: {hold['reason']}" if thai
+                else f"qualifies but held: {hold['reason']}")
     if rec:
         partial = rec.get("partial_level", rec.get("target"))
         when = datetime.fromisoformat(rec["triggered_at"]).astimezone(BKK if thai else ET)
@@ -453,7 +456,9 @@ def section_c(thai: bool) -> list[str]:
         return lines
 
     now = datetime.now(ET)
-    records = special_watch.today_records(special_watch.load_state(), now.date())
+    state = special_watch.load_state()
+    records = special_watch.visible_records(state, now.date())
+    holds = special_watch.holds_today(state, now.date())
     if thai:
         lines.append(f"ราคาล่าสุดเมื่อ {now.astimezone(BKK).strftime('%H:%M')} น. ไทย "
                      "(ตลาดเหล่านี้เปิดเกือบตลอด 24 ชม. จึงไม่มีช่วงก่อนตลาดเปิด)")
@@ -468,7 +473,7 @@ def section_c(thai: bool) -> list[str]:
             lines.append(f"{i}. {it.name} ({it.symbol}) " + ("ไม่มีข้อมูลราคา" if thai else "no price"))
             continue
         chg = it.change_pct if it.change_pct is not None else 0.0
-        sig = _signal_text(it, records.get(it.symbol), thai)
+        sig = _signal_text(it, records.get(it.symbol), thai, holds.get(it.symbol))
         if thai:
             move = f"ขึ้น {abs(chg):.2f}%" if chg >= 0 else f"ลง {abs(chg):.2f}%"
             trend = {True: "ขาขึ้น", False: "ขาลง", None: "ไม่ทราบ"}[it.uptrend]
