@@ -17,7 +17,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from . import config, ea_bridge
+from . import config, ea_bridge, trade_fmt
 from . import telegram_notify as tg
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,9 @@ def orders_text() -> str:
     lines = [f"สถานะ EA: {ea_bridge.ea_status_th()}", f"โฟลเดอร์ไฟล์: {ea_bridge.files_dir()}"]
     lines.append(f"รายการรอ EA: {len(pend)}")
     for r in pend[-5:]:
-        lines.append(f"  • {r['id']} {r['symbol']} {r['side']} {r['lots']} ล็อต S/L {r['sl']} T/P {r['tp']} ({r['created_utc']} UTC)")
+        lines.append(f"  • {r['id']} {r['symbol']} {trade_fmt.badge(r['side'])} {r['lots']} ล็อต "
+                     f"{trade_fmt.stop_arrow(r['side'])} S/L {r['sl']} {trade_fmt.tp_arrow(r['side'])} T/P {r['tp']} "
+                     f"({r['created_utc']} UTC)")
     lines.append(f"ผลล่าสุดจาก EA: {len(res)} รายการ")
     for r in res:
         lines.append("  • " + ea_bridge.fmt_result_th(r))

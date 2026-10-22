@@ -67,6 +67,7 @@ TELEGRAM_CHAT_ID: str = _env_str("TELEGRAM_CHAT_ID", "")              # owner: g
 TELEGRAM_EXTRA_CHAT_IDS: str = _env_str("TELEGRAM_EXTRA_CHAT_IDS", "")  # groups/channels: reports + signals only
 REPORT_LANGUAGE: str = _env_str("REPORT_LANGUAGE", "th").lower()   # "th" plain Thai | "en"
 TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate headlines to Thai
+REPORT_NEWS: bool = _env_bool("REPORT_NEWS", False)                # news headline under each ticker in sections A/B
 
 # Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)

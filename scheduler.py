@@ -215,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     for line in describe_schedule(jobs).splitlines():
         log.info(line)
     log.info("Telegram delivery: %s", "configured" if tg.is_configured() else "NOT configured (run telegram_setup.py --save)")
+    tunnel_obj = None
     if config.TV_WEBHOOK_ENABLED:
         try:
             server = tv_webhook.start_in_background()
@@ -222,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             server = None
             log.error("TradingView webhook server could not start on port %d: %s", config.TV_WEBHOOK_PORT, exc)
         if server is not None and config.TUNNEL_ENABLED:
-            tunnel.start_in_background(config.TV_WEBHOOK_PORT)
+            tunnel_obj = tunnel.start_in_background(config.TV_WEBHOOK_PORT)
     if config.TELEGRAM_COMMANDS_ENABLED:
         from premarket_scanner import telegram_commands
         telegram_commands.start_in_background()
@@ -231,22 +232,29 @@ def main(argv: list[str] | None = None) -> int:
         for job in jobs:
             run_job(job)
 
-    while True:
-        now = datetime.now(ET)
-        job, due = min(((j, next_occurrence(now, j.times, j.weekdays_only)) for j in jobs), key=lambda x: x[1])
-        if job.send_report:
-            log.info(
-                "next: %s at %s ET (%s local)",
-                job.name,
-                due.strftime("%a %Y-%m-%d %H:%M"),
-                due.astimezone().strftime("%a %Y-%m-%d %H:%M %Z"),
-            )
+    try:
         while True:
-            remaining = (due - datetime.now(ET)).total_seconds()
-            if remaining <= 0:
-                break
-            time.sleep(min(60, remaining))
-        run_job(job)
+            now = datetime.now(ET)
+            job, due = min(((j, next_occurrence(now, j.times, j.weekdays_only)) for j in jobs), key=lambda x: x[1])
+            if job.send_report:
+                log.info(
+                    "next: %s at %s ET (%s local)",
+                    job.name,
+                    due.strftime("%a %Y-%m-%d %H:%M"),
+                    due.astimezone().strftime("%a %Y-%m-%d %H:%M %Z"),
+                )
+            while True:
+                remaining = (due - datetime.now(ET)).total_seconds()
+                if remaining <= 0:
+                    break
+                time.sleep(min(60, remaining))
+            run_job(job)
+    except KeyboardInterrupt:
+        log.info("scheduler stopped (Ctrl+C)")
+    finally:
+        if tunnel_obj is not None:
+            tunnel_obj.stop()         # a hard kill skips this; the job object covers that case
+    return 0
 
 
 if __name__ == "__main__":

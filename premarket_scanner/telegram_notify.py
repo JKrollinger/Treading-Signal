@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
-from . import config, report, strategy, translate
+from . import config, report, strategy, trade_fmt, translate
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ def section_a(pre: dict | None) -> list[str]:
             f"{i}. {r['ticker']}  {_money(r.get('price'))}  {float(r.get('gap_pct') or 0):+.2f}%  "
             f"pre-mkt vol {vol_txt}{tag}"
         )
-        if r.get("catalyst"):
+        if config.REPORT_NEWS and r.get("catalyst"):
             lines.append(f"   {r['catalyst']}")
     for w in _important(pre.get("warnings") or []):
         lines.append(f"Note: {w}")
@@ -217,7 +217,7 @@ def section_b(strat: dict | None) -> list[str]:
     for i, s in enumerate(signals, 1):
         tag = "  NEW" if s["ticker"] in new else ""
         lines.append(
-            f"{i}. {s['ticker']}  entry {_money(s.get('entry_price'))}{tag}  "
+            f"{i}. {s['ticker']}  {trade_fmt.BUY_BADGE} {trade_fmt.ENTRY} entry {_money(s.get('entry_price'))}{tag}  "
             f"(triggered {_hhmm(s.get('first_triggered_at'))} ET)"
         )
         lines.append(
@@ -227,7 +227,7 @@ def section_b(strat: dict | None) -> list[str]:
         )
         if s.get("gap_pct") is not None:
             lines.append(f"   gap {float(s['gap_pct']):+.2f}% | pre-mkt vol {int(s.get('premarket_volume') or 0):,}")
-        if s.get("catalyst"):
+        if config.REPORT_NEWS and s.get("catalyst"):
             lines.append(f"   {s['catalyst']}")
     for w in _important(strat.get("warnings") or []):
         lines.append(f"Note: {w}")
@@ -236,7 +236,7 @@ def section_b(strat: dict | None) -> list[str]:
 
 # Thai, plain-language formatting ------------------------------------------------
 def _when_th(iso: str | None) -> str:
-    """'08:30 น. เวลาตลาดสหรัฐ (19:30 น. ไทย)'"""
+    """'19:30 น. ไทย (08:30 ET)'"""
     if not iso:
         return "ไม่ทราบเวลา"
     try:
@@ -245,7 +245,20 @@ def _when_th(iso: str | None) -> str:
         return iso
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ET)
-    return f"{dt.astimezone(ET).strftime('%H:%M')} น. เวลาตลาดสหรัฐ ({dt.astimezone(BKK).strftime('%H:%M')} น. ไทย)"
+    return f"{dt.astimezone(BKK).strftime('%H:%M')} น. ไทย ({dt.astimezone(ET).strftime('%H:%M')} ET)"
+
+
+def _hhmm_th(iso: str | None) -> str:
+    """'21:05 น. ไทย' - Thai wall-clock time only."""
+    if not iso:
+        return "ไม่ทราบเวลา"
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ET)
+    return f"{dt.astimezone(BKK).strftime('%H:%M')} น. ไทย"
 
 
 def _date_th(iso_date: str | None) -> str:
@@ -305,23 +318,25 @@ def section_a_th(pre: dict | None) -> list[str]:
         return lines
     c = pre.get("criteria") or {}
     results = pre.get("results") or []
-    lines.append(f"สแกนเมื่อ {_when_th(pre.get('generated_at'))} วันที่ {_date_th(pre.get('date'))}")
     lines.append(
-        f"ตรวจหุ้นสหรัฐ {int(pre.get('universe_size') or 0):,} ตัว พบ {len(results)} ตัวที่ราคาขึ้นมากกว่า "
-        f"{c.get('min_gap_pct', 5):g}% จากราคาปิดเมื่อวาน ราคาสูงกว่า ${c.get('min_price', 3):g} "
-        f"และมีคนซื้อขายช่วงก่อนตลาดเปิดมากกว่า {int(c.get('min_premarket_volume') or 0):,} หุ้น"
+        f"{_date_th(pre.get('date'))} {_when_th(pre.get('generated_at'))} | "
+        f"ตรวจ {int(pre.get('universe_size') or 0):,} ตัว เข้าเกณฑ์ {len(results)} ตัว"
+    )
+    lines.append(
+        f"(เกณฑ์: ขึ้น >{c.get('min_gap_pct', 5):g}% จากปิดเมื่อวาน ราคา >${c.get('min_price', 3):g} "
+        f"ซื้อขายก่อนเปิด >{int(c.get('min_premarket_volume') or 0):,} หุ้น)"
     )
     if not results:
-        lines.append("ไม่มีหุ้นตัวไหนเข้าเกณฑ์ในรอบนี้")
+        lines.append("ไม่มีหุ้นเข้าเกณฑ์ในรอบนี้")
     for i, r in enumerate(results, 1):
         vol = r.get("premarket_volume")
         vol_txt = f"{int(vol):,} หุ้น" if vol is not None else "ไม่ทราบ"
-        tag = "" if r.get("session") == "premarket" else " (วัดหลังตลาดเปิดแล้ว)"
+        tag = "" if r.get("session") == "premarket" else " (หลังตลาดเปิด)"
         lines.append(
-            f"{i}. {_label(r['ticker'], r.get('name'))} ราคา {_money(r.get('price'))} "
-            f"ขึ้น {abs(float(r.get('gap_pct') or 0)):.2f}% จากเมื่อวาน ซื้อขายแล้ว {vol_txt}{tag}"
+            f"{i}. {_label(r['ticker'], r.get('name'))} {_money(r.get('price'))} "
+            f"ขึ้น {abs(float(r.get('gap_pct') or 0)):.2f}% ซื้อขาย {vol_txt}{tag}"
         )
-        news = _news_line_th(r.get("catalyst"))
+        news = _news_line_th(r.get("catalyst")) if config.REPORT_NEWS else None
         if news:
             lines.append(news)
     for w in _important(pre.get("warnings") or []):
@@ -338,11 +353,7 @@ def section_b_th(strat: dict | None, names: dict[str, str] | None = None) -> lis
     signals = strat.get("signals") or []
     new = set(strat.get("new_signals") or [])
     scanned = strat.get("scanned") or []
-    lines.append(f"ตรวจเมื่อ {_when_th(strat.get('generated_at'))} จากหุ้น {len(scanned)} ตัวในรายการด้านบน")
-    lines.append(
-        "เงื่อนไขที่ต้องผ่านครบทุกข้อ: ราคาตอนนี้สูงกว่าจุดสูงสุดของเมื่อวาน, ราคาปิดเมื่อวานอยู่เหนือเส้นค่าเฉลี่ย 200 วัน "
-        "(แนวโน้มระยะยาวเป็นขาขึ้น) และราคากำลังทำจุดสูงสุดใหม่ของวัน สูงกว่าจุดสูงสุดช่วงก่อนตลาดเปิด"
-    )
+    lines.append(f"{_when_th(strat.get('generated_at'))} | ตรวจ {len(scanned)} ตัวจากรายการ A")
     if not signals:
         start = strategy._parse_hhmm(config.STRATEGY_START_ET)
         try:
@@ -352,36 +363,23 @@ def section_b_th(strat: dict | None, names: dict[str, str] | None = None) -> lis
         except (KeyError, ValueError):
             before, start_th = False, ""
         if before:
-            lines.append(
-                f"ยังไม่มีหุ้นผ่านครบทุกเงื่อนไข (เริ่มนับสัญญาณตั้งแต่ {start.strftime('%H:%M')} น. เวลาตลาดสหรัฐ "
-                f"หรือ {start_th} น. ไทย)"
-            )
+            lines.append(f"ยังไม่มีหุ้นผ่านเงื่อนไข (เริ่มนับสัญญาณตั้งแต่ {start_th} น. ไทย)")
         else:
-            lines.append("ยังไม่มีหุ้นผ่านครบทุกเงื่อนไขในรอบนี้")
+            lines.append("ยังไม่มีหุ้นผ่านเงื่อนไขในรอบนี้")
     else:
-        lines.append(f"ผ่านเงื่อนไข {len(signals)} ตัว (ใหม่ในรอบนี้ {len(new)} ตัว):")
+        lines.append(f"ผ่านเงื่อนไข {len(signals)} ตัว (ใหม่ {len(new)}):")
         for i, s in enumerate(signals, 1):
             tag = " ใหม่!" if s["ticker"] in new else ""
             lines.append(
-                f"{i}. {_label(s['ticker'], names.get(s['ticker']))} สัญญาณซื้อที่ราคา {_money(s.get('entry_price'))}{tag} "
-                f"เมื่อ {_when_th(s.get('first_triggered_at'))}"
+                f"{i}. {_label(s['ticker'], names.get(s['ticker']))} {trade_fmt.BUY_BADGE} "
+                f"{trade_fmt.ENTRY} เข้า {_money(s.get('entry_price'))}{tag} ({_hhmm_th(s.get('first_triggered_at'))})"
             )
-            lines.append(
-                f"   เหตุผล: สูงกว่าจุดสูงสุดเมื่อวาน ({_money(s.get('yesterday_high'))}) | "
-                f"สูงกว่าจุดสูงสุดก่อนตลาดเปิด ({_money(s.get('premarket_high'))}) | "
-                f"เป็นจุดสูงสุดของวัน ({_money(s.get('high_of_day'))}) | "
-                f"ปิดเมื่อวาน {_money(s.get('yesterday_close'))} เหนือเส้นค่าเฉลี่ย 200 วัน ({_money(s.get('sma200'))})"
-            )
-            if s.get("gap_pct") is not None:
-                lines.append(
-                    f"   ก่อนตลาดเปิดวันนี้ขึ้น {float(s['gap_pct']):+.2f}% ซื้อขาย {int(s.get('premarket_volume') or 0):,} หุ้น"
-                )
-            news = _news_line_th(s.get("catalyst"))
+            news = _news_line_th(s.get("catalyst")) if config.REPORT_NEWS else None
             if news:
                 lines.append(news)
     failed = [ev["ticker"] for ev in scanned if not ev.get("valid")]
     if failed:
-        lines.append(f"ตรวจแล้วยังไม่ผ่านเงื่อนไข: {', '.join(failed)}")
+        lines.append(f"ยังไม่ผ่าน: {', '.join(failed)}")
     for w in _important(strat.get("warnings") or []):
         lines.append(_warning_th(w))
     return lines
@@ -400,9 +398,7 @@ HEADER_C_TH = "[Scanner C: สินทรัพย์ที่สนใจเ�
 
 def _plan_text(entry, stop, target, currency: str, thai: bool) -> str:
     fp = lambda v: special_fmt(v, currency)  # noqa: E731
-    if thai:
-        return f"เข้า {fp(entry)} | ตัดขาดทุน {fp(stop)} | เป้าหมาย {fp(target)}"
-    return f"entry {fp(entry)} | stop {fp(stop)} | target {fp(target)}"
+    return trade_fmt.plan(entry, stop, target, fp, thai=thai)
 
 
 def special_fmt(v, currency: str) -> str:
@@ -416,37 +412,37 @@ def _signal_text(it, rec: dict | None, thai: bool, hold: dict | None = None) -> 
     cur = it.currency
     fp = lambda v: special_fmt(v, cur)  # noqa: E731
     if rec is None and hold and it.signal:
-        return (f"เข้าเงื่อนไขแต่ยังไม่นับเป็นสัญญาณ: {hold['reason']}" if thai
+        return (f"เข้าเงื่อนไขแต่ยังไม่นับ: {hold['reason']}" if thai
                 else f"qualifies but held: {hold['reason']}")
     if rec:
         partial = rec.get("partial_level", rec.get("target"))
         when = datetime.fromisoformat(rec["triggered_at"]).astimezone(BKK if thai else ET)
         when_txt = when.strftime("%d/%m %H:%M") if thai else when.strftime("%m-%d %H:%M")
+        result_r = rec.get("result_r") or 0
+        buy, out = trade_fmt.BUY_BADGE, trade_fmt.EXIT
+        plan = trade_fmt.plan(rec["entry"], rec["stop"], partial, fp, thai=thai)
         if thai:
-            plan = f"เข้า {fp(rec['entry'])} | ตัดขาดทุนตอนนี้ {fp(rec['stop'])} | ปิดครึ่งที่ {fp(partial)}"
             return {
-                "active": f"ผ่าน กำลังถืออยู่ ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
-                "partial": f"ปิดครึ่งไม้แล้ว ส่วนที่เหลือถือตามแนวโน้ม ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
-                "weakened": f"อ่อนลง ราคาหลุดใต้จุดสูงสุดเมื่อวาน ({plan}, สัญญาณเมื่อ {when_txt} น. ไทย)",
-                "stopped": f"ถึงจุดตัดขาดทุนแล้ว ผล {rec.get('result_r') or 0:+.2f}R (สัญญาณเมื่อ {when_txt} น. ไทย)",
-                "expired": f"ครบกำหนดถือแล้ว ผล {rec.get('result_r') or 0:+.2f}R (สัญญาณเมื่อ {when_txt} น. ไทย)",
+                "active": f"{buy} ถืออยู่ | {plan} | ตั้งแต่ {when_txt}",
+                "partial": f"{buy} ปิดครึ่งแล้ว ถือที่เหลือ | {plan} | ตั้งแต่ {when_txt}",
+                "weakened": f"{buy} อ่อนลง (หลุดจุดสูงสุดเมื่อวาน) | {plan} | ตั้งแต่ {when_txt}",
+                "stopped": f"{out} ออกที่ตัดขาดทุนแล้ว ผล {result_r:+.2f}R (สัญญาณ {when_txt})",
+                "expired": f"{out} ออกครบกำหนดแล้ว ผล {result_r:+.2f}R (สัญญาณ {when_txt})",
             }.get(rec["status"], rec["status"])
-        plan = f"entry {fp(rec['entry'])} | stop now {fp(rec['stop'])} | half off at {fp(partial)}"
-        return f"{rec['status'].upper()} ({plan}, since {when_txt} ET)"
+        return f"{buy} {rec['status'].upper()} | {plan} | since {when_txt} ET"
     if it.signal:
         if it.plan:
-            plan = (f"เข้า {fp(it.plan.entry)} | ตัดขาดทุน {fp(it.plan.stop)} | ปิดครึ่งที่ {fp(it.plan.target)}"
-                    if thai else f"entry {fp(it.plan.entry)} | stop {fp(it.plan.stop)} | half off at {fp(it.plan.target)}")
-            return f"ผ่าน ({plan})" if thai else f"YES ({plan})"
+            plan = trade_fmt.plan(it.plan.entry, it.plan.stop, it.plan.target, fp, thai=thai)
+            return f"ผ่าน {trade_fmt.BUY_BADGE} | {plan}" if thai else f"YES {trade_fmt.BUY_BADGE} | {plan}"
         return "ผ่าน" if thai else "YES"
     if thai:
         why = []
         if it.above_yesterday_high is False:
-            why.append(f"ยังต่ำกว่าจุดสูงสุดเมื่อวาน {special_fmt(it.yesterday_high, cur)}")
+            why.append(f"ต่ำกว่าจุดสูงสุดเมื่อวาน {special_fmt(it.yesterday_high, cur)}")
         if it.at_high_of_day is False:
-            why.append("ยังไม่ใช่จุดสูงสุดของวัน")
+            why.append("ไม่ใช่จุดสูงสุดของวัน")
         if it.uptrend is False:
-            why.append("แนวโน้มระยะยาวยังเป็นขาลง")
+            why.append("แนวโน้มระยะยาวขาลง")
         return "ยังไม่ผ่าน" + (f" ({', '.join(why)})" if why else "")
     return f"no (y-high {special_fmt(it.yesterday_high, cur)}, HOD {special_fmt(it.day_high, cur)})"
 
@@ -470,10 +466,8 @@ def section_c(thai: bool) -> list[str]:
     records = special_watch.visible_records(state, now.date())
     holds = special_watch.holds_today(state, now.date())
     if thai:
-        lines.append(f"ราคาล่าสุดเมื่อ {now.astimezone(BKK).strftime('%H:%M')} น. ไทย "
-                     "(ตลาดเหล่านี้เปิดเกือบตลอด 24 ชม. จึงไม่มีช่วงก่อนตลาดเปิด)")
-        if config.SPECIAL_WATCH_ENABLED:
-            lines.append(f"ระบบเฝ้าสัญญาณกลุ่มนี้ทุก {config.SPECIAL_WATCH_INTERVAL_MIN} นาที และจะแจ้งทันทีเมื่อเกิดสัญญาณซื้อใหม่")
+        every = f" (เฝ้าสัญญาณทุก {config.SPECIAL_WATCH_INTERVAL_MIN} นาที)" if config.SPECIAL_WATCH_ENABLED else ""
+        lines.append(f"ราคาล่าสุด {now.astimezone(BKK).strftime('%H:%M')} น. ไทย{every}")
     else:
         lines.append(f"Prices as of {now.strftime('%H:%M')} ET (24-hour markets, no pre-market)")
 
@@ -487,8 +481,7 @@ def section_c(thai: bool) -> list[str]:
         if thai:
             move = f"ขึ้น {abs(chg):.2f}%" if chg >= 0 else f"ลง {abs(chg):.2f}%"
             trend = {True: "ขาขึ้น", False: "ขาลง", None: "ไม่ทราบ"}[it.uptrend]
-            lines.append(f"{i}. {it.name} ({it.symbol}) ราคา {price} {move} จากเมื่อวาน")
-            lines.append(f"   แนวโน้มระยะยาว: {trend} | สัญญาณซื้อ Trend-join: {sig}")
+            lines.append(f"{i}. {it.name} ({it.symbol}) {price} {move} | แนวโน้ม: {trend} | สัญญาณ: {sig}")
         else:
             trend = {True: "uptrend", False: "downtrend", None: "unknown"}[it.uptrend]
             lines.append(f"{i}. {it.name} ({it.symbol}) {price} {chg:+.2f}% vs prev close | "

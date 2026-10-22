@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, mt5_source
+from . import config, mt5_source, trade_fmt
+from .trade_fmt import ENTRY, EXIT
 
 log = logging.getLogger(__name__)
 
@@ -158,16 +159,17 @@ def format_section(snap: dict | None, thai: bool) -> list[str]:
     else:
         lines.append(f"ไม้ที่เปิดอยู่ {len(positions)} ไม้:" if thai else f"Open positions ({len(positions)}):")
         for i, p in enumerate(positions, 1):
-            side = ("ซื้อ" if p["type"] == "buy" else "ขาย") if thai else p["type"].upper()
+            side = trade_fmt.badge(p["type"])
+            sl_arrow, tp_arrow = trade_fmt.stop_arrow(p["type"]), trade_fmt.tp_arrow(p["type"])
             sl = _price(p["sl"], p["symbol"]) if p["sl"] else ("ไม่ได้ตั้ง!" if thai else "none!")
             tp = _price(p["tp"], p["symbol"]) if p["tp"] else ("ไม่ได้ตั้ง" if thai else "none")
             if thai:
-                lines.append(f"{i}. {p['symbol']} {side} {p['volume']:g} ล็อต เข้า {_price(p['price_open'], p['symbol'])} "
-                             f"ตอนนี้ {_price(p['price_current'], p['symbol'])} | S/L {sl} | T/P {tp} | "
+                lines.append(f"{i}. {p['symbol']} {side} {p['volume']:g} ล็อต {ENTRY} เข้า {_price(p['price_open'], p['symbol'])} "
+                             f"ตอนนี้ {_price(p['price_current'], p['symbol'])} | {sl_arrow} S/L {sl} | {tp_arrow} T/P {tp} | "
                              f"กำไร {_money(p['profit'], cur)} (เปิด {_bkk(p['opened_at'])} น. ไทย){_signal_note(p['symbol'], True)}")
             else:
-                lines.append(f"{i}. {p['symbol']} {side} {p['volume']:g} lots @ {_price(p['price_open'], p['symbol'])} "
-                             f"now {_price(p['price_current'], p['symbol'])} | SL {sl} | TP {tp} | "
+                lines.append(f"{i}. {p['symbol']} {side} {p['volume']:g} lots {ENTRY} @ {_price(p['price_open'], p['symbol'])} "
+                             f"now {_price(p['price_current'], p['symbol'])} | {sl_arrow} SL {sl} | {tp_arrow} TP {tp} | "
                              f"P/L {_money(p['profit'], cur)} (opened {_bkk(p['opened_at'])}){_signal_note(p['symbol'], False)}")
     closed = snap["closed_today"]
     total = sum(c["profit"] for c in closed)
@@ -179,37 +181,39 @@ def format_section(snap: dict | None, thai: bool) -> list[str]:
 
 
 def fmt_opened(p: dict, cur: str, thai: bool) -> str:
-    side = ("ซื้อ" if p["type"] == "buy" else "ขาย") if thai else p["type"].upper()
+    side = trade_fmt.badge(p["type"])
+    sl_arrow, tp_arrow = trade_fmt.stop_arrow(p["type"]), trade_fmt.tp_arrow(p["type"])
     sl = _price(p["sl"], p["symbol"]) if p["sl"] else None
     tp = _price(p["tp"], p["symbol"]) if p["tp"] else None
     if thai:
-        text = (f"📗 เปิดไม้ใหม่ใน MT5: {p['symbol']} {side} {p['volume']:g} ล็อต เข้า {_price(p['price_open'], p['symbol'])}"
-                f" | S/L {sl or 'ยังไม่ได้ตั้ง ⚠️ ควรตั้งทันที'} | T/P {tp or 'ยังไม่ได้ตั้ง'}{_signal_note(p['symbol'], True)}")
+        text = (f"📗 {ENTRY} เปิดไม้ใหม่ใน MT5: {p['symbol']} {side} {p['volume']:g} ล็อต เข้า {_price(p['price_open'], p['symbol'])}"
+                f" | {sl_arrow} S/L {sl or 'ยังไม่ได้ตั้ง ⚠️ ควรตั้งทันที'} | {tp_arrow} T/P {tp or 'ยังไม่ได้ตั้ง'}"
+                f"{_signal_note(p['symbol'], True)}")
     else:
-        text = (f"OPENED in MT5: {p['symbol']} {side} {p['volume']:g} lots @ {_price(p['price_open'], p['symbol'])}"
-                f" | SL {sl or 'NONE - set one'} | TP {tp or 'none'}{_signal_note(p['symbol'], False)}")
+        text = (f"OPENED {ENTRY} in MT5: {p['symbol']} {side} {p['volume']:g} lots @ {_price(p['price_open'], p['symbol'])}"
+                f" | {sl_arrow} SL {sl or 'NONE - set one'} | {tp_arrow} TP {tp or 'none'}{_signal_note(p['symbol'], False)}")
     return text
 
 
 def fmt_closed(p: dict, close: dict | None, cur: str, balance: float | None, thai: bool) -> str:
-    side = ("ซื้อ" if p["type"] == "buy" else "ขาย") if thai else p["type"].upper()
+    side = trade_fmt.badge(p["type"])
     if close is None:
-        return (f"📕 ไม้ {p['symbol']} {side} {p['volume']:g} ล็อต (เข้า {_price(p['price_open'], p['symbol'])}) ปิดแล้ว "
+        return (f"📕 {EXIT} ไม้ {p['symbol']} {side} {p['volume']:g} ล็อต (เข้า {_price(p['price_open'], p['symbol'])}) ปิดแล้ว "
                 f"แต่อ่านรายละเอียดการปิดไม่ได้" if thai else
-                f"CLOSED {p['symbol']} {side} {p['volume']:g} lots (entry {_price(p['price_open'], p['symbol'])}); details unavailable")
+                f"CLOSED {EXIT} {p['symbol']} {side} {p['volume']:g} lots (entry {_price(p['price_open'], p['symbol'])}); details unavailable")
     held = close["time"] - datetime.fromisoformat(p["opened_at"])
     hours, minutes = divmod(int(held.total_seconds() // 60), 60)
     reason = (DEAL_REASON_TH if thai else DEAL_REASON_EN).get(close["reason"], str(close["reason"]))
     pnl = _money(close["profit"], cur)
     if thai:
         verdict = "กำไร" if close["profit"] > 0 else ("ขาดทุน" if close["profit"] < 0 else "เท่าทุน")
-        text = (f"📕 ไม้ปิดแล้ว: {p['symbol']} {side} {p['volume']:g} ล็อต เข้า {_price(p['price_open'], p['symbol'])} "
-                f"ปิด {_price(close['price'], p['symbol'])} โดย {reason} {verdict} {pnl} (ถือ {hours} ชม. {minutes} นาที)")
+        text = (f"📕 {EXIT} ไม้ปิดแล้ว: {p['symbol']} {side} {p['volume']:g} ล็อต {ENTRY} เข้า {_price(p['price_open'], p['symbol'])} "
+                f"{EXIT} ปิด {_price(close['price'], p['symbol'])} โดย {reason} {verdict} {pnl} (ถือ {hours} ชม. {minutes} นาที)")
         if balance is not None:
             text += f"\nยอดเงินตอนนี้ {balance:,.2f} {cur}"
     else:
-        text = (f"CLOSED {p['symbol']} {side} {p['volume']:g} lots: entry {_price(p['price_open'], p['symbol'])} "
-                f"exit {_price(close['price'], p['symbol'])} by {reason}, {pnl} (held {hours}h {minutes}m)")
+        text = (f"CLOSED {EXIT} {p['symbol']} {side} {p['volume']:g} lots: {ENTRY} entry {_price(p['price_open'], p['symbol'])} "
+                f"{EXIT} exit {_price(close['price'], p['symbol'])} by {reason}, {pnl} (held {hours}h {minutes}m)")
         if balance is not None:
             text += f"\nBalance now {balance:,.2f} {cur}"
     return text

@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, mt5_source
+from . import config, mt5_source, trade_fmt
 
 log = logging.getLogger(__name__)
 
@@ -190,9 +190,11 @@ def fmt_request_th(row: dict, sizing: dict | None, name: str | None = None) -> s
     label = f"{name} ({row['symbol']})" if name else row["symbol"]
     tp_val = float(row["tp"] or 0)
     tp_txt = f"{tp_val:g}" if tp_val else "ไม่ตั้ง"
+    side = row["side"]
     lines = [
-        f"📝 ส่งรายการสั่งซื้อให้ EA แล้ว: {label} {row['side']} {row['lots']} ล็อต",
-        f"S/L {float(row['sl']):g} | T/P {tp_txt} | ราคาอ้างอิง {float(row['entry_ref']):g}",
+        f"📝 ส่งรายการสั่งซื้อให้ EA แล้ว: {label} {trade_fmt.badge(side)} {row['lots']} ล็อต",
+        f"{trade_fmt.ENTRY} ราคาอ้างอิง {float(row['entry_ref']):g} | {trade_fmt.stop_arrow(side)} S/L {float(row['sl']):g} | "
+        f"{trade_fmt.tp_arrow(side)} T/P {tp_txt}",
     ]
     if sizing:
         lines.append(f"ความเสี่ยงประมาณ {sizing['risk_money']:,.2f} {sizing['currency']} "

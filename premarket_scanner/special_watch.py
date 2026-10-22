@@ -24,8 +24,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, filters, special
+from . import config, filters, special, trade_fmt
 from .special import SpecialItem, fmt_price
+from .trade_fmt import BUY_BADGE, DOWN, EXIT
 
 log = logging.getLogger(__name__)
 
@@ -118,12 +119,14 @@ def add_trading_days(d: date, n: int) -> date:
 
 
 # Formatting -----------------------------------------------------------------------
-def _when(iso_or_dt, thai: bool) -> str:
+def _when(iso_or_dt, thai: bool, with_date: bool = False) -> str:
+    """'17:08 น. ไทย' / '06:08 ET'; with_date adds the day ('22/10 17:08 น. ไทย')."""
     dt = datetime.fromisoformat(iso_or_dt) if isinstance(iso_or_dt, str) else iso_or_dt
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ET)
-    et, bkk = dt.astimezone(ET).strftime("%H:%M"), dt.astimezone(BKK).strftime("%H:%M")
-    return f"{bkk} น. ไทย ({et} น. เวลาตลาดสหรัฐ)" if thai else f"{et} ET ({bkk} Bangkok)"
+    if thai:
+        return dt.astimezone(BKK).strftime("%d/%m %H:%M" if with_date else "%H:%M") + " น. ไทย"
+    return dt.astimezone(ET).strftime("%m-%d %H:%M" if with_date else "%H:%M") + " ET"
 
 
 def _record(it: SpecialItem, now: datetime) -> dict:
@@ -177,26 +180,22 @@ def fmt_new(rec: dict, thai: bool) -> str:
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     trail_dist = rec["trail_atr_mult"] * rec["atr"]
     if thai:
+        expires = date.fromisoformat(rec["expires_on"]).strftime("%d/%m")
         return "\n".join([
-            f"🔔 สัญญาณซื้อใหม่ (Trend-join Long): {rec['name']} ({rec['symbol']})",
-            f"เวลา {_when(rec['triggered_at'], True)}",
-            f"ราคาเข้าโดยประมาณ: {fp(rec['entry'])}",
-            f"จุดตัดขาดทุนเริ่มต้น: {fp(rec['initial_stop'])} (ต่ำกว่าราคาเข้า {rec['risk_pct']:.2f}% "
-            f"เท่ากับระยะที่ราคาแกว่งเฉลี่ยใน 1 วัน คิดจาก {config.ATR_PERIOD} วันล่าสุด)",
-            f"แผนทำกำไร: ปิดครึ่งไม้เมื่อราคาถึง {fp(rec['partial_level'])} (+{rec['partial_r']:g}R) "
-            f"ส่วนที่เหลือถือตามแนวโน้ม โดยเลื่อนจุดตัดขาดทุนตามราคาสูงสุดห่าง {rec['trail_atr_mult']:g} ATR "
-            f"(ประมาณ {fp(trail_dist)}) จะแจ้งทุกครั้งที่จุดตัดขาดทุนขยับขึ้น ถือไม่เกิน {rec['max_hold_days']} วันทำการ "
-            f"(ถึง {rec['expires_on']})",
-            f"เหตุผล: ราคาทะลุจุดสูงสุดเมื่อวาน {fp(rec['breakout_level'])} และกำลังอยู่ที่จุดสูงสุดของวัน "
-            f"แนวโน้มระยะยาวเป็นขาขึ้น (ปิดเมื่อวาน {fp(rec.get('yesterday_close'))} "
-            f"เหนือเส้นค่าเฉลี่ย 200 วัน {fp(rec.get('sma200'))})",
+            f"🔔 สัญญาณใหม่ {BUY_BADGE}: {rec['name']} ({rec['symbol']}) {_when(rec['triggered_at'], True)}",
+            trade_fmt.plan(rec["entry"], rec["initial_stop"], rec["partial_level"], fp, thai=True,
+                           stop_note=f" (-{rec['risk_pct']:.2f}%)", tp_note=f" (+{rec['partial_r']:g}R ปิดครึ่ง)"),
+            f"ที่เหลือเลื่อนตัดขาดทุนตามราคา (ห่าง {rec['trail_atr_mult']:g} ATR ≈ {fp(trail_dist)}) "
+            f"ถือไม่เกิน {rec['max_hold_days']} วันทำการ (ถึง {expires})",
+            f"เหตุผล: ทะลุจุดสูงสุดเมื่อวาน {fp(rec['breakout_level'])} ที่จุดสูงสุดของวัน แนวโน้มระยะยาวขาขึ้น",
             DISCLAIMER_TH,
         ])
     return "\n".join([
-        f"NEW Trend-join Long signal: {rec['name']} ({rec['symbol']})",
+        f"NEW {BUY_BADGE} Trend-join Long signal: {rec['name']} ({rec['symbol']})",
         f"Time {_when(rec['triggered_at'], False)}",
-        f"Entry ~{fp(rec['entry'])} | initial stop {fp(rec['initial_stop'])} (-{rec['risk_pct']:.2f}%, "
-        f"{config.STOP_ATR_MULT:g} x ATR{config.ATR_PERIOD})",
+        trade_fmt.plan(rec["entry"], rec["initial_stop"], rec["partial_level"], fp, thai=False,
+                       stop_note=f" (-{rec['risk_pct']:.2f}%, {config.STOP_ATR_MULT:g} x ATR{config.ATR_PERIOD})",
+                       tp_note=f" (+{rec['partial_r']:g}R, half off)"),
         f"Plan: half off at {fp(rec['partial_level'])} (+{rec['partial_r']:g}R), rest trails "
         f"{rec['trail_atr_mult']:g} x ATR (~{fp(trail_dist)}) below the highest price, max {rec['max_hold_days']} "
         f"trading days (until {rec['expires_on']})",
@@ -209,11 +208,10 @@ def fmt_partial(rec: dict, price: float, thai: bool) -> str:
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     if thai:
-        return (f"✅ {rec['name']} ({rec['symbol']}): ราคา {fp(price)} ถึงระดับ +{rec['partial_r']:g}R แล้ว "
-                f"แนะนำปิดครึ่งไม้ที่ราคานี้ (ล็อกกำไรไว้ก่อน) ส่วนที่เหลือถือต่อ "
-                f"จุดตัดขาดทุนตอนนี้ {fp(rec['stop'])} และจะเลื่อนขึ้นตามราคา")
-    return (f"PARTIAL {rec['name']} ({rec['symbol']}): {fp(price)} reached +{rec['partial_r']:g}R; take half, "
-            f"trail the rest, current stop {fp(rec['stop'])}")
+        return (f"✅ {EXIT} ออกครึ่งที่ T/P: {rec['name']} ({rec['symbol']}) {fp(price)} (+{rec['partial_r']:g}R) "
+                f"ปิดครึ่งไม้ | {DOWN} ตัดขาดทุนตอนนี้ {fp(rec['stop'])} (เลื่อนตามราคา)")
+    return (f"PARTIAL {EXIT} {rec['name']} ({rec['symbol']}): {fp(price)} reached +{rec['partial_r']:g}R; take half, "
+            f"trail the rest, {DOWN} current stop {fp(rec['stop'])}")
 
 
 def fmt_trail(rec: dict, thai: bool) -> str:
@@ -221,10 +219,10 @@ def fmt_trail(rec: dict, thai: bool) -> str:
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     locked = (rec["stop"] - rec["entry"]) / rec["risk"]
     if thai:
-        state = ("กำไรล็อกไว้แล้ว" if rec["stop"] > rec["entry"] else "ยังต่ำกว่าราคาเข้า")
-        return (f"🔼 {rec['name']} ({rec['symbol']}): เลื่อนจุดตัดขาดทุนขึ้นเป็น {fp(rec['stop'])} "
-                f"(ราคาสูงสุดตั้งแต่เข้า {fp(rec['highest'])}) {state} {locked:+.2f}R ของส่วนที่ถืออยู่")
-    return (f"TRAIL {rec['name']} ({rec['symbol']}): stop raised to {fp(rec['stop'])} "
+        state = "ล็อกกำไร" if rec["stop"] > rec["entry"] else "ยังต่ำกว่าราคาเข้า"
+        return (f"🔼 {rec['name']} ({rec['symbol']}) {DOWN} ตัดขาดทุนเลื่อนขึ้นเป็น {fp(rec['stop'])} "
+                f"(สูงสุด {fp(rec['highest'])}) {state} {locked:+.2f}R")
+    return (f"TRAIL {rec['name']} ({rec['symbol']}): {DOWN} stop raised to {fp(rec['stop'])} "
             f"(highest {fp(rec['highest'])}, {locked:+.2f}R locked on the remainder)")
 
 
@@ -232,14 +230,12 @@ def fmt_stopped(rec: dict, price: float, thai: bool) -> str:
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     r = combined_r(rec, rec["stop"])
-    t = _when(rec["triggered_at"], thai)
-    kind_th = "จุดตัดขาดทุนที่เลื่อนตามแนวโน้ม" if rec["stop"] > rec["initial_stop"] else "จุดตัดขาดทุนเริ่มต้น"
+    t = _when(rec["triggered_at"], thai, with_date=True)
     if thai:
-        verb = "กำไร" if r > 0 else "ขาดทุน"
-        return (f"⛔ {rec['name']} ({rec['symbol']}): ราคา {fp(price)} ถึง{kind_th} {fp(rec['stop'])} แล้ว "
-                f"ควรปิดไม้ที่เหลือ ผลรวมของสัญญาณนี้ประมาณ {r:+.2f}R ({verb}) จากสัญญาณเมื่อ {t}"
-                + (" รวมครึ่งไม้ที่ปิดไปแล้ว" if rec.get("partial_taken") else ""))
-    return (f"STOP {rec['name']} ({rec['symbol']}): {fp(price)} <= stop {fp(rec['stop'])}; close the rest, "
+        kind_th = "จุดตัดขาดทุนที่เลื่อนตาม" if rec["stop"] > rec["initial_stop"] else "จุดตัดขาดทุน"
+        return (f"⛔ {EXIT} ออกที่ตัดขาดทุน: {rec['name']} ({rec['symbol']}) {fp(price)} ถึง{kind_th} "
+                f"{fp(rec['stop'])} ปิดไม้ที่เหลือ | ผลรวม {r:+.2f}R (สัญญาณ {t})")
+    return (f"STOP {EXIT} {rec['name']} ({rec['symbol']}): {fp(price)} <= stop {fp(rec['stop'])}; close the rest, "
             f"combined result {r:+.2f}R (signal {t})")
 
 
@@ -248,30 +244,29 @@ def fmt_expired(rec: dict, price: float, thai: bool) -> str:
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     r = combined_r(rec, price)
     if thai:
-        return (f"⏱ {rec['name']} ({rec['symbol']}): ครบ {rec['max_hold_days']} วันทำการแล้ว "
-                f"แนะนำปิดไม้ที่เหลือที่ราคาปัจจุบัน {fp(price)} ผลรวมประมาณ {r:+.2f}R")
-    return (f"EXPIRED {rec['name']} ({rec['symbol']}): {rec['max_hold_days']} trading days reached; "
+        return (f"⏱ {EXIT} ออกครบกำหนด: {rec['name']} ({rec['symbol']}) ครบ {rec['max_hold_days']} วันทำการ "
+                f"ปิดไม้ที่เหลือที่ {fp(price)} | ผลรวม {r:+.2f}R")
+    return (f"EXPIRED {EXIT} {rec['name']} ({rec['symbol']}): {rec['max_hold_days']} trading days reached; "
             f"close at {fp(price)}, combined result {r:+.2f}R")
 
 
 def fmt_held(it: SpecialItem, reason: str, thai: bool) -> str:
     c = it.currency
     if thai:
-        return (f"⏸ {it.name} ({it.symbol}): เข้าเงื่อนไข Trend-join ที่ราคา {fmt_price(it.price, c)} "
-                f"แต่ยังไม่นับเป็นสัญญาณ เพราะ{reason} (แจ้งครั้งเดียวต่อวัน จะนับใหม่เมื่อพ้นช่วงนี้และราคายังเข้าเงื่อนไข)")
-    return f"HELD {it.name} ({it.symbol}) at {fmt_price(it.price, c)}: {reason}"
+        return (f"⏸ {it.name} ({it.symbol}) เข้าเงื่อนไข {BUY_BADGE} ที่ {fmt_price(it.price, c)} แต่ยังไม่นับ "
+                f"เพราะ{reason} (แจ้งวันละครั้ง นับใหม่เมื่อพ้นช่วงนี้)")
+    return f"HELD {BUY_BADGE} {it.name} ({it.symbol}) at {fmt_price(it.price, c)}: {reason}"
 
 
 def fmt_weakened(rec: dict, price: float, thai: bool) -> str:
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
-    t = _when(rec["triggered_at"], thai)
+    t = _when(rec["triggered_at"], thai, with_date=True)
     if thai:
-        return (f"⚠️ {rec['name']} ({rec['symbol']}): ราคา {fp(price)} กลับลงต่ำกว่าจุดสูงสุดเมื่อวาน "
-                f"{fp(rec['breakout_level'])} แล้ว สัญญาณซื้อเมื่อ {t} อ่อนลง ยังไม่ถึงจุดตัดขาดทุน "
-                f"{fp(rec['stop'])} แต่ควรเฝ้าใกล้ชิด")
+        return (f"⚠️ {rec['name']} ({rec['symbol']}) {fp(price)} หลุดใต้จุดสูงสุดเมื่อวาน {fp(rec['breakout_level'])} "
+                f"สัญญาณ {t} อ่อนลง | {DOWN} ตัดขาดทุนยัง {fp(rec['stop'])}")
     return (f"WEAKENED {rec['name']} ({rec['symbol']}): {fp(price)} back below breakout level "
-            f"{fp(rec['breakout_level'])} (signal {t}); stop still {fp(rec['stop'])}")
+            f"{fp(rec['breakout_level'])} (signal {t}); {DOWN} stop still {fp(rec['stop'])}")
 
 
 # Main loop body ------------------------------------------------------------------

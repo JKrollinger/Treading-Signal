@@ -119,8 +119,12 @@ Everything received is forwarded to Telegram and logged to
    installed (`winget install Cloudflare.cloudflared`) and `TUNNEL_ENABLED=true` the
    scheduler starts a Cloudflare quick tunnel itself, keeps it alive, writes the public
    address to `data/tunnel_url.txt` and **sends the complete webhook URL to Telegram**
-   every time it changes (it changes on every restart; no account needed). Print it any
-   time with:
+   every time it changes (it changes on every restart; no account needed). The tunnel
+   lives and dies with the scheduler: each `cloudflared` is tied to the scheduler
+   process through a Windows job object, so stopping the task (even a hard kill) ends the
+   tunnel too, and on start the scheduler kills any `cloudflared` an earlier run left
+   behind (recognised by the bot's own config file or its port). Print the URL any time
+   with:
 
    ```bash
    .venv\Scripts\python tunnel_url.py
@@ -301,31 +305,37 @@ holds every ticker's values and which checks failed, so a miss is explainable.
 After every scheduled run the scheduler sends one message with three sections:
 Scanner A (pre-market gappers), Scanner B (Trend-join Long hits) and Scanner C (the
 special watchlist: currency pairs, gold, bitcoin). The default language is **plain Thai**
-written for readers without a trading background (`REPORT_LANGUAGE=th`); English headlines
-are translated to Thai when `TRANSLATE_NEWS=true` (free public service, falls back to the
-English headline). Example:
+written for readers without a trading background (`REPORT_LANGUAGE=th`). Sections A and B
+list signals only, one line per ticker; the news headline under each ticker is off by
+default and comes back with `REPORT_NEWS=true` (translated to Thai when
+`TRANSLATE_NEWS=true`, free public service, falls back to the English headline). Example:
 
 ```
 [Scanner A: หุ้นที่พุ่งขึ้นก่อนตลาดเปิด]
-สแกนเมื่อ 08:30 น. เวลาตลาดสหรัฐ (19:30 น. ไทย) วันที่ 22 ต.ค. 2026
-ตรวจหุ้นสหรัฐ 4,569 ตัว พบ 2 ตัวที่ราคาขึ้นมากกว่า 5% จากราคาปิดเมื่อวาน ราคาสูงกว่า $3 และมีคนซื้อขายช่วงก่อนตลาดเปิดมากกว่า 50,000 หุ้น
-1. QS (QuantumScape) ราคา $4.29 ขึ้น 7.79% จากเมื่อวาน ซื้อขายแล้ว 159,961 หุ้น
-   ข่าว: QuantumScape รายงานผลการดำเนินธุรกิจและการเงินไตรมาสที่สามปี 2026
+22 ต.ค. 2026 19:30 น. ไทย (08:30 ET) | ตรวจ 4,569 ตัว เข้าเกณฑ์ 2 ตัว
+(เกณฑ์: ขึ้น >5% จากปิดเมื่อวาน ราคา >$3 ซื้อขายก่อนเปิด >50,000 หุ้น)
+1. SAIQ (WISeSat.Space) $6.21 ขึ้น 11.69% ซื้อขาย 293,070 หุ้น
+2. QS (QuantumScape) $4.29 ขึ้น 7.79% ซื้อขาย 159,961 หุ้น
 
 [Scanner B: หุ้นที่เข้าเงื่อนไขซื้อ Trend-join Long]
-ตรวจเมื่อ 10:05 น. เวลาตลาดสหรัฐ (21:05 น. ไทย) จากหุ้น 2 ตัวในรายการด้านบน
-เงื่อนไขที่ต้องผ่านครบทุกข้อ: ...
-ผ่านเงื่อนไข 1 ตัว (ใหม่ในรอบนี้ 1 ตัว):
-1. QS (QuantumScape) สัญญาณซื้อที่ราคา $4.52 ใหม่! เมื่อ 10:05 น. เวลาตลาดสหรัฐ (21:05 น. ไทย)
-   เหตุผล: สูงกว่าจุดสูงสุดเมื่อวาน ($4.08) | สูงกว่าจุดสูงสุดก่อนตลาดเปิด ($4.38) | ...
+21:05 น. ไทย (10:05 ET) | ตรวจ 2 ตัวจากรายการ A
+ผ่านเงื่อนไข 1 ตัว (ใหม่ 1):
+1. QS (QuantumScape) 🟢 BUY ➡️ เข้า $4.52 ใหม่! (21:05 น. ไทย)
+ยังไม่ผ่าน: SAIQ
 
 [Scanner C: สินทรัพย์ที่สนใจเป็นพิเศษ]
-ราคาล่าสุดเมื่อ 21:05 น. ไทย (ตลาดเหล่านี้เปิดเกือบตลอด 24 ชม. จึงไม่มีช่วงก่อนตลาดเปิด)
-1. ทองคำ (ฟิวเจอร์ส) (GC=F) ราคา $4,100 ลง 1.21% จากเมื่อวาน
-   แนวโน้มระยะยาว: ขาลง | สัญญาณซื้อ Trend-join: ยังไม่ผ่าน (ยังต่ำกว่าจุดสูงสุดเมื่อวาน $4,161, ...)
+ราคาล่าสุด 21:05 น. ไทย (เฝ้าสัญญาณทุก 5 นาที)
+1. ทองคำ (OANDA:XAUUSD) $4,100 ลง 1.21% | แนวโน้ม: ขาลง | สัญญาณ: ยังไม่ผ่าน (ต่ำกว่าจุดสูงสุดเมื่อวาน $4,161)
+2. ดอลลาร์/บาท (FX_IDC:USDTHB) 33.74 THB ขึ้น 0.40% | แนวโน้ม: ขาขึ้น | สัญญาณ: 🟢 BUY ถืออยู่ | ➡️ เข้า 33.71 THB | 🔻 ตัดขาดทุน 33.53 THB | 🔺 T/P 33.89 THB | ตั้งแต่ 22/10 17:08
 
 ข้อมูลอัตโนมัติเพื่อประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน
 ```
+
+Every trade plan in the bot (Scanner B and C, the Scanner C alerts, the MT5 account
+report and position alerts, EA order requests) uses the same marks, defined in
+`premarket_scanner/trade_fmt.py`: 🟢 BUY / 🔴 SELL for the side, ➡️ the entry, ⬅️ an
+exit that has happened, 🔻 the stop level and 🔺 the take-profit level (the two level
+arrows flip for a SELL, whose stop sits above the entry).
 
 Scanner C lists each symbol in `SPECIAL_WATCHLIST` (Yahoo symbols: `EURUSD=X` style
 pairs, `GC=F` gold, `BTC-USD`) with the latest price, change versus the previous
@@ -347,13 +357,21 @@ skipped, which is how closed FX/gold sessions are ignored while bitcoin keeps ru
 The moment a symbol newly passes the Trend-join rules it sends an alert like:
 
 ```
-🔔 สัญญาณซื้อใหม่ (Trend-join Long): ทองคำ (ราคาอ้างอิงตลาดโลก) (GC=F)
-เวลา 23:05 น. ไทย (12:05 น. เวลาตลาดสหรัฐ)
-ราคาเข้าโดยประมาณ: $4,120
-จุดตัดขาดทุน: $4,080 (ต่ำกว่าราคาเข้า 0.97% เท่ากับระยะที่ราคาแกว่งเฉลี่ยใน 1 วัน คิดจาก 14 วันล่าสุด)
-เป้าหมายทำกำไร: $4,200 (สูงกว่าราคาเข้า 1.94% คือ 2 เท่าของระยะเสี่ยง)
-เหตุผล: ราคาทะลุจุดสูงสุดเมื่อวาน $4,100 และกำลังอยู่ที่จุดสูงสุดของวัน แนวโน้มระยะยาวเป็นขาขึ้น (...)
-ถ้าราคากลับลงต่ำกว่า $4,100 ก่อนถึงเป้าหมาย ถือว่าสัญญาณอ่อนลง จะแจ้งให้ทราบ
+🔔 สัญญาณใหม่ 🟢 BUY: ทองคำ (OANDA:XAUUSD) 23:05 น. ไทย
+➡️ เข้า $4,120 | 🔻 ตัดขาดทุน $4,080 (-0.97%) | 🔺 T/P $4,160 (+1R ปิดครึ่ง)
+ที่เหลือเลื่อนตัดขาดทุนตามราคา (ห่าง 3 ATR ≈ $120) ถือไม่เกิน 10 วันทำการ (ถึง 05/11)
+เหตุผล: ทะลุจุดสูงสุดเมื่อวาน $4,100 ที่จุดสูงสุดของวัน แนวโน้มระยะยาวขาขึ้น
+ข้อมูลอัตโนมัติเพื่อประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน
+```
+
+The follow-up alerts for that signal are one line each:
+
+```
+✅ ⬅️ ออกครึ่งที่ T/P: ทองคำ (OANDA:XAUUSD) $4,160 (+1R) ปิดครึ่งไม้ | 🔻 ตัดขาดทุนตอนนี้ $4,080 (เลื่อนตามราคา)
+🔼 ทองคำ (OANDA:XAUUSD) 🔻 ตัดขาดทุนเลื่อนขึ้นเป็น $4,140 (สูงสุด $4,260) ล็อกกำไร +0.50R
+⚠️ ทองคำ (OANDA:XAUUSD) $4,095 หลุดใต้จุดสูงสุดเมื่อวาน $4,100 สัญญาณ 22/10 23:05 น. ไทย อ่อนลง | 🔻 ตัดขาดทุนยัง $4,080
+⛔ ⬅️ ออกที่ตัดขาดทุน: ทองคำ (OANDA:XAUUSD) $4,080 ถึงจุดตัดขาดทุน $4,080 ปิดไม้ที่เหลือ | ผลรวม -1.00R (สัญญาณ 22/10 23:05 น. ไทย)
+⏱ ⬅️ ออกครบกำหนด: ทองคำ (OANDA:XAUUSD) ครบ 10 วันทำการ ปิดไม้ที่เหลือที่ $4,150 | ผลรวม +0.88R
 ```
 
 The plan follows the exit that won the backtest comparison (v2-trail): initial stop =
@@ -393,17 +411,16 @@ With `REPORT_LANGUAGE=en` the message uses the compact English layout below:
 [Scanner A: Pre-market Gappers]
 2026-10-22 08:30 ET | 2 match(es) from 4,569 scanned | gap>5.0% price>$3.0 pre-mkt vol>50,000
 1. SAIQ  $6.21  +11.69%  pre-mkt vol 293,070
-   WISeSat.Space and SEALSQ Advance Satellite Cybersecurity Hardening ...
 2. QS  $4.29  +7.79%  pre-mkt vol 159,961
-   QuantumScape Reports Third Quarter 2026 Business and Financial Results.
 
 [Scanner B: Trend-join Long Hits]
 2026-10-22 10:05 ET | 1 hit(s) from 2 checked | 1 new
-1. QS  entry $4.52  NEW  (triggered 10:05 ET)
+1. QS  🟢 BUY ➡️ entry $4.52  NEW  (triggered 10:05 ET)
    above Y-high $4.08, PM high $4.38, HOD $4.52 | Y-close $3.98 > SMA200 $6.89
    gap +7.79% | pre-mkt vol 159,961
-   QuantumScape Reports Third Quarter 2026 Business and Financial Results.
 ```
+
+(`REPORT_NEWS=true` adds the headline under each ticker in both layouts.)
 
 Section A is always the latest Scanner A list of the day and section B the setups
 triggered so far today, so every message is complete on its own. Scanner A runs after the
@@ -543,7 +560,8 @@ overwrites that day's file.
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather. |
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives the reports; `telegram_setup.py --save` fills it in. |
 | `REPORT_LANGUAGE` | `th` | `th` plain Thai, `en` compact English. |
-| `TRANSLATE_NEWS` | `true` | Translate English headlines to Thai (cached in `data/translations_th.json`). |
+| `REPORT_NEWS` | `false` | Show the news headline under each ticker in sections A and B. Off keeps the message to signals only. |
+| `TRANSLATE_NEWS` | `true` | Translate English headlines to Thai when they are shown (cached in `data/translations_th.json`). |
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |
 | `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`), `mt5` (your broker via MetaTrader 5, symbols like `XAUUSD`) or `yahoo` (symbols like `GC=F`). |
 | `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
