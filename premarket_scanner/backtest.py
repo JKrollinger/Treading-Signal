@@ -63,6 +63,12 @@ class Params:
     # which side may trade: "long" (Trend-join Long), "short" (the mirror, Trend-join Short)
     # or "both" (the 200-day SMA picks the side each day; still one trade at a time)
     side: str = "long"
+    # intraday versions: the "day" becomes a bar of this many minutes (None = calendar day),
+    # so SMA200, ATR14, "yesterday's high" and "high of day" are taken on that bar size and
+    # max_hold_days counts those bars
+    level_minutes: int | None = None
+    cost_abs: float | None = None      # round-trip cost in price units (spread + commission); overrides cost_pct
+    hod_tol_atr: float | None = None   # "at the high of the period" tolerance in ATRs; overrides hod_tol_pct
 
 
 @dataclass
@@ -139,13 +145,39 @@ def load_mt5_hourly(symbol: str, days: int = 730) -> pd.DataFrame:
     return out
 
 
+def load_mt5_bars(symbol: str, timeframe: str = "M5", count: int = 99_999) -> pd.DataFrame:
+    """The latest ``count`` bars of any MT5 timeframe (the terminal keeps at most its
+    "max bars in chart", 100,000 by default, so M5 reaches back about 16 months)."""
+    from . import mt5_source
+
+    if not mt5_source.connect():
+        return pd.DataFrame()
+    mt5 = mt5_source._mt5()
+    mt5.symbol_select(symbol, True)
+    rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, f"TIMEFRAME_{timeframe}"), 0, count)
+    if rates is None or len(rates) == 0:
+        return pd.DataFrame()
+    df = pd.DataFrame(rates)
+    df.index = pd.to_datetime(df["time"], unit="s")          # naive = server time
+    out = df[["open", "high", "low", "close"]].copy()
+    out.attrs["tz_offset_hours"] = mt5_source.server_offset_hours(symbol)
+    return out
+
+
 # Indicators --------------------------------------------------------------------------
 def _wilder(series: pd.Series, n: int) -> pd.Series:
     return series.ewm(alpha=1.0 / n, adjust=False).mean()
 
 
+def period_keys(bars: pd.DataFrame, p: Params):
+    """The 'day' each bar belongs to: its calendar date, or the start of its level bar."""
+    if p.level_minutes:
+        return bars.index.floor(f"{int(p.level_minutes)}min")
+    return bars.index.date
+
+
 def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
-    dates = bars.index.date
+    dates = period_keys(bars, p)
     g = bars.groupby(dates)
     daily = pd.DataFrame({"high": g["high"].max(), "low": g["low"].min(), "close": g["close"].last()})
     daily["sma"] = daily["close"].rolling(p.sma_period).mean()
@@ -185,7 +217,9 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
         return SymbolResult(symbol, source, p.name, len(bars), "", "", 0, [], {"trades": 0, "note": "not enough bars"})
     daily = daily_levels(bars, p)
     date_pos = {d: i for i, d in enumerate(daily.index)}
-    bar_dates = bars.index.date
+    bar_dates = period_keys(bars, p)
+    if p.level_minutes:
+        bar_dates = list(bar_dates)                 # Timestamps, matching daily.index
     if bars.index.tz is not None:
         utc_hours = bars.index.tz_convert("UTC").hour.to_numpy()
     else:
@@ -237,11 +271,17 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
             continue
         c = closes[i]
         is_long = day_side == "long"
+        if p.hod_tol_atr is not None:
+            tol_abs = p.hod_tol_atr * float(y["y_atr"])
+            at_extreme = (c >= hod - tol_abs) if is_long else (c <= lod + tol_abs)
+        else:
+            at_extreme = (c >= hod * (1.0 - p.hod_tol_pct / 100.0)) if is_long else \
+                (c <= lod * (1.0 + p.hod_tol_pct / 100.0))
         if is_long:
             # breakout above yesterday's high while at the high of the day
-            if not (c > float(y["y_high"]) and c >= hod * (1.0 - p.hod_tol_pct / 100.0)):
+            if not (c > float(y["y_high"]) and at_extreme):
                 continue
-        elif not (c < float(y["y_low"]) and c <= lod * (1.0 + p.hod_tol_pct / 100.0)):
+        elif not (c < float(y["y_low"]) and at_extreme):
             # mirror: breakdown below yesterday's low while at the low of the day
             continue
         h = int(utc_hours[i])
@@ -251,7 +291,7 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
         if p.friday_cutoff_utc is not None and weekdays[i] == 4 and h >= p.friday_cutoff_utc:
             skipped["friday_late"] += 1
             continue
-        if p.news_blackout and in_news_blackout(d, h):
+        if p.news_blackout and in_news_blackout(bars.index[i].date(), h):
             skipped["news_blackout"] += 1
             continue
 
@@ -294,14 +334,15 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
         if exit_price is None:
             exit_price = float(closes[-1])
 
-        cost_r = (p.cost_pct / 100.0) * entry / risk
+        cost_pct = p.cost_abs / entry * 100.0 if p.cost_abs is not None else p.cost_pct
+        cost_r = (cost_pct / 100.0) * entry / risk
         if partial_price is not None:
             r = 0.5 * sign * (partial_price - entry) / risk + 0.5 * sign * (exit_price - entry) / risk - cost_r
             pct = (0.5 * sign * (partial_price / entry - 1.0) * 100.0
-                   + 0.5 * sign * (exit_price / entry - 1.0) * 100.0 - p.cost_pct)
+                   + 0.5 * sign * (exit_price / entry - 1.0) * 100.0 - cost_pct)
         else:
             r = sign * (exit_price - entry) / risk - cost_r
-            pct = sign * (exit_price / entry - 1.0) * 100.0 - p.cost_pct
+            pct = sign * (exit_price / entry - 1.0) * 100.0 - cost_pct
         trades.append(Trade(
             symbol, str(d), bars.index[i].isoformat(), entry, initial_stop, target,
             bars.index[j_exit].isoformat(), exit_price, exit_reason, float(r), float(pct), int(j_exit - i),
