@@ -218,10 +218,16 @@ def _loop() -> None:
             for upd in updates:
                 offset = int(upd["update_id"]) + 1
                 _save_offset(offset)
-                when = (upd.get("message") or {}).get("date") or ((upd.get("callback_query") or {}).get("message") or {}).get("date")
-                if when and time.time() - float(when) > STALE_UPDATE_SECONDS and "callback_query" in upd:
-                    log.info("ignoring stale button press (update %s)", upd["update_id"])
+                # A button press carries no timestamp of its own (only the date of the message it
+                # sits on), so presses are never treated as stale: the persisted offset already
+                # prevents replays after a restart. Only old /commands are skipped.
+                msg_date = (upd.get("message") or {}).get("date")
+                if msg_date and time.time() - float(msg_date) > STALE_UPDATE_SECONDS:
+                    log.info("ignoring old message (update %s)", upd["update_id"])
                     continue
+                log.info("telegram update %s: %s", upd["update_id"],
+                         "button " + str((upd.get("callback_query") or {}).get("data")) if "callback_query" in upd
+                         else "message " + str((upd.get("message") or {}).get("text"))[:40])
                 try:
                     handle_update(upd, send=True)
                 except Exception:  # noqa: BLE001
