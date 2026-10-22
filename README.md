@@ -203,9 +203,12 @@ stop, T/P = entry + `EA_TP_R` x risk. The reply shows the request and whether th
 alive (`heartbeat.txt`). Only the owner's Telegram user can press the buttons; the bot
 persists the update offset so a restart never replays old presses.
 
-Telegram commands (owner only): `/status` (account section), `/orders` (pending requests,
-latest EA results, EA heartbeat), `/test [SYMBOL]` (a minimum-lot dry-run request to check
-the pipeline), `/help`.
+Telegram commands (owner only): `/status` (account section), `/report` (today's full
+report with the account section), `/orders` (pending requests, latest EA results, EA
+heartbeat), `/test [SYMBOL]` (a minimum-lot dry-run request to check the pipeline),
+`/help`, `/menu`. The owner's private chat also gets a persistent menu keyboard under the
+message box (📊 พอร์ต MT5, 🔔 รายงานล่าสุด, 📋 รายการ EA, 🧪 ทดสอบ EA, ❓ ช่วยเหลือ) that
+sends the same commands with one tap; `/menu` brings it back.
 
 `mt5_ea/SignalBotBridge.mq5` is the Expert Advisor skeleton that completes the loop:
 every `InpPollSeconds` it reads `orders.csv`, skips ids listed in `processed.txt`, checks

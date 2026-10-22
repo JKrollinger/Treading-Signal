@@ -53,6 +53,31 @@ def test_keyboard(symbol: str) -> dict:
     return {"inline_keyboard": [[{"text": "🧪 ทดสอบส่งรายการให้ EA (0.01 ล็อต)", "callback_data": f"test:{symbol}"}]]}
 
 
+# Persistent menu under the message box (owner's private chat only)
+MENU = {
+    "📊 พอร์ต MT5": "status",
+    "🔔 รายงานล่าสุด": "report",
+    "📋 รายการ EA": "orders",
+    "🧪 ทดสอบ EA": "test",
+    "❓ ช่วยเหลือ": "help",
+}
+
+
+def menu_keyboard() -> dict:
+    labels = list(MENU)
+    return {
+        "keyboard": [[{"text": labels[0]}, {"text": labels[1]}], [{"text": labels[2]}, {"text": labels[3]}], [{"text": labels[4]}]],
+        "resize_keyboard": True,
+        "is_persistent": True,
+        "input_field_placeholder": "เลือกจากเมนูด้านล่าง หรือพิมพ์คำสั่ง",
+    }
+
+
+def send_menu() -> bool:
+    text = "เมนูพร้อมใช้งานแล้ว กดปุ่มด้านล่างได้เลย (พิมพ์ /menu เพื่อเรียกเมนูกลับมา)"
+    return tg.send_message(text, admin_only=True, reply_markup=menu_keyboard())
+
+
 # Actions ------------------------------------------------------------------------------
 def confirm_trade(symbol: str) -> str:
     from . import special, special_watch
@@ -110,10 +135,12 @@ def orders_text() -> str:
 
 
 HELP_TH = "\n".join([
-    "คำสั่งที่ใช้ได้:",
-    "/status  ดูพอร์ต MT5 (ยอดเงิน ไม้ที่เปิด กำไรขาดทุน)",
-    "/orders  ดูรายการที่ส่งให้ EA และผลล่าสุด",
-    "/test    ส่งรายการทดสอบ 0.01 ล็อตให้ EA (ต้องเป็นโหมด DryRun)",
+    "เมนูด้านล่าง (หรือพิมพ์คำสั่ง):",
+    "📊 พอร์ต MT5 (/status)  ยอดเงิน ไม้ที่เปิด กำไรขาดทุน",
+    "🔔 รายงานล่าสุด (/report)  รายงานสแกน A/B/C และพอร์ต ณ ตอนนี้",
+    "📋 รายการ EA (/orders)  รายการที่ส่งให้ EA และผลล่าสุด",
+    "🧪 ทดสอบ EA (/test)  ส่งรายการทดสอบ 0.01 ล็อตให้ EA (EA ต้องเป็นโหมด DryRun)",
+    "/menu  เรียกเมนูกลับมา",
     "ปุ่มบนข้อความสัญญาณ: ยืนยันเข้าเทรด = เขียนรายการสั่งซื้อให้ EA | ข้าม = ไม่ทำอะไร",
 ])
 
@@ -159,21 +186,33 @@ def handle_update(upd: dict, send: bool = True) -> list[str]:
     m = upd.get("message")
     if m and str((m.get("from") or {}).get("id")) == _owner_id():
         text = str(m.get("text") or "").strip()
-        cmd = text.split("@")[0].split()[0].lower() if text.startswith("/") else ""
+        action = MENU.get(text)
+        if action is None and text.startswith("/"):
+            action = {"/status": "status", "/orders": "orders", "/test": "test", "/help": "help",
+                      "/start": "menu", "/menu": "menu", "/report": "report"}.get(text.split("@")[0].split()[0].lower())
         reply = None
-        if cmd == "/status":
+        markup = None
+        if action == "status":
             reply = status_text()
-        elif cmd == "/orders":
+        elif action == "orders":
             reply = orders_text()
-        elif cmd == "/test":
+        elif action == "test":
             parts = text.split()
-            reply = test_request(parts[1].upper() if len(parts) > 1 else (config.SPECIAL_WATCHLIST[0] if config.SPECIAL_WATCHLIST else "XAUUSD"))
-        elif cmd in ("/help", "/start"):
+            symbol = parts[1].upper() if text.startswith("/") and len(parts) > 1 else \
+                (config.SPECIAL_WATCHLIST[0] if config.SPECIAL_WATCHLIST else "XAUUSD")
+            reply = test_request(symbol)
+        elif action == "report":
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _Z
+            reply = tg.build_report_for(_dt.now(_Z(config.MARKET_TZ)).date(), include_portfolio=True)
+        elif action == "help":
             reply = HELP_TH
+        elif action == "menu":
+            reply, markup = "เมนูพร้อมใช้งานแล้ว กดปุ่มด้านล่างได้เลย", menu_keyboard()
         if reply:
             out.append(reply)
             if send:
-                tg.send_message(reply, admin_only=True)
+                tg.send_message(reply, admin_only=True, reply_markup=markup)
     return out
 
 
