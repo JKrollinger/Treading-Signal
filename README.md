@@ -157,6 +157,44 @@ Any TradingView alert works, not only this indicator: a plain-text message is fo
 is, and a JSON message with `signal`, `ticker`, `exchange`, `price`, `stop`, `target`,
 `interval` fields is formatted into the Thai layout.
 
+# MetaTrader 5 (phase 1: your broker's prices, read-only)
+
+With `SPECIAL_DATA_SOURCE=mt5` Scanner C takes live prices, today's and yesterday's
+levels, the 200-day SMA and the ATR from the **MetaTrader 5 terminal running on this PC**
+(logged in to your broker, demo or live), through the official `MetaTrader5` Python
+package. Symbols are the broker's own names (`XAUUSD`, `EURUSD`, `BTCUSD`, sometimes with
+a suffix such as `XAUUSD.m`). Nothing in this phase places orders.
+
+Requirements: the MT5 desktop terminal installed and open on this Windows machine. Leave
+`MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` empty to attach to the account already logged
+in; set `MT5_PATH` to `terminal64.exe` only if auto-detection fails. Check the connection
+and find your broker's symbol names with:
+
+```bash
+.venv\Scripts\python mt5_probe.py
+```
+
+If MT5 is unreachable the scanner falls back to TradingView, then Yahoo, mapping the
+broker symbol to the equivalent (`XAUUSD` -> `OANDA:XAUUSD` -> `GC=F`).
+
+## Backtest of the Trend-join Long rules
+
+`backtest_trend_join.py` replays the rules on hourly history: yesterday's close above the
+200-day SMA, a bar closing above yesterday's high while at the high of the day, entry at
+that close, stop 1 x ATR(14) below, target 2 x the risk, exit at stop/target or after 5
+trading days, one trade per symbol per day, a flat 0.03 % round-trip cost.
+
+```bash
+.venv\Scripts\python backtest_trend_join.py                 # Yahoo hourly data, ~2 years
+.venv\Scripts\python backtest_trend_join.py --source mt5    # your broker's data via MT5
+.venv\Scripts\python backtest_trend_join.py --hold 3 --stop-atr 1.5 --target-r 2 --send
+```
+
+It prints a per-symbol table (trades, win rate, average R, total R, profit factor, max
+drawdown in R, exit reasons), writes `output/backtest_trend_join_<source>_<date>.json`
+and, with `--send`, posts a plain-Thai summary to Telegram. "R" is the initial risk per
+trade (entry minus stop). Real spreads and slippage are not modelled beyond the flat cost.
+
 ## Running it on TradingView charts
 
 `tradingview/trend_join_long.pine` is a Pine Script v6 indicator with the same three rules.
@@ -411,7 +449,8 @@ overwrites that day's file.
 | `REPORT_LANGUAGE` | `th` | `th` plain Thai, `en` compact English. |
 | `TRANSLATE_NEWS` | `true` | Translate English headlines to Thai (cached in `data/translations_th.json`). |
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |
-| `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`) or `yahoo` (symbols like `GC=F`). |
+| `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`), `mt5` (your broker via MetaTrader 5, symbols like `XAUUSD`) or `yahoo` (symbols like `GC=F`). |
+| `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
 | `SPECIAL_WATCHLIST` | `FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD` | Symbols for Scanner C, in the style of the chosen source. |
 | `TV_WEBHOOK_ENABLED` | `true` | Start the TradingView webhook receiver with the scheduler. |
 | `TV_WEBHOOK_BIND` / `TV_WEBHOOK_PORT` | `127.0.0.1` / `8787` | Where the receiver listens (expose it with a tunnel). |
@@ -482,6 +521,10 @@ premarket_scanner/
 special_watch_once.py   one manual Scanner C check (--status / --no-send)
 tv_webhook_server.py    run the webhook receiver alone, or --test to post a sample alert
 tunnel_url.py           print (or --send to Telegram) the current TradingView webhook URL
-premarket_scanner/tunnel.py   Cloudflare quick tunnel supervisor used by the scheduler
+mt5_probe.py            check the MetaTrader 5 connection and list broker symbols
+backtest_trend_join.py  replay the Trend-join Long rules on hourly history (Yahoo or MT5)
+premarket_scanner/tunnel.py       Cloudflare quick tunnel supervisor used by the scheduler
+premarket_scanner/mt5_source.py   MetaTrader 5 prices, levels and hourly history (read-only)
+premarket_scanner/backtest.py     backtest engine and reports
 output/                 daily JSON files (premarket_scan_<date>.json, trend_join_<date>.json)
 ```

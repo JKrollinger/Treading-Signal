@@ -53,6 +53,11 @@ NAMES_EN = {
     "ETHUSDT": "Ethereum", "SOLUSD": "Solana", "SOLUSDT": "Solana", "XRPUSD": "XRP", "XRPUSDT": "XRP",
     "^GSPC": "S&P 500", "SPX": "S&P 500", "^IXIC": "Nasdaq", "^DJI": "Dow Jones",
 }
+# TradingView equivalents for plain (MT5-style) symbols, used as a fallback
+TRADINGVIEW_EQUIVALENT = {
+    "XAUUSD": "OANDA:XAUUSD", "GOLD": "OANDA:XAUUSD", "XAGUSD": "OANDA:XAGUSD",
+    "BTCUSD": "BITSTAMP:BTCUSD", "ETHUSD": "BITSTAMP:ETHUSD", "USDTHB": "FX_IDC:USDTHB",
+}
 # Best-effort Yahoo equivalents used when TradingView is down
 YAHOO_EQUIVALENT = {
     "XAUUSD": "GC=F", "GOLD": "GC=F", "XAGUSD": "SI=F", "SILVER": "SI=F", "USOIL": "CL=F",
@@ -76,6 +81,11 @@ def base_symbol(symbol: str) -> str:
     if s.endswith("=F"):
         return symbol.upper()
     s = s.replace("-", "")
+    # broker suffixes such as XAUUSD.m / EURUSDm / GOLD# are common on MT5
+    for suffix in (".M", ".C", ".R", ".I", "M", "#", ".PRO", ".ECN", "_RAW", ".STD"):
+        if s.endswith(suffix) and len(s) > len(suffix) + 5:
+            s = s[: -len(suffix)]
+            break
     return s
 
 
@@ -85,14 +95,26 @@ def display_name(symbol: str, thai: bool) -> str:
 
 
 def yahoo_equivalent(symbol: str) -> str | None:
-    """Yahoo symbol for a TradingView-style symbol, or None if unknown."""
-    if ":" not in symbol:
-        return symbol
+    """Yahoo symbol for a TradingView- or MT5-style symbol, or None if unknown."""
+    if ":" not in symbol and ("=" in symbol or "-" in symbol or symbol.startswith("^")):
+        return symbol                            # already a Yahoo symbol
     base = base_symbol(symbol)
     if base in YAHOO_EQUIVALENT:
         return YAHOO_EQUIVALENT[base]
     if len(base) == 6 and base.isalpha():        # a currency pair such as EURUSD
         return f"{base}=X"
+    return None
+
+
+def tradingview_equivalent(symbol: str) -> str | None:
+    """TradingView symbol for an MT5-style symbol (XAUUSD -> OANDA:XAUUSD)."""
+    if ":" in symbol:
+        return symbol
+    base = base_symbol(symbol)
+    if base in TRADINGVIEW_EQUIVALENT:
+        return TRADINGVIEW_EQUIVALENT[base]
+    if len(base) == 6 and base.isalpha():
+        return f"FX:{base}"
     return None
 
 
@@ -180,6 +202,31 @@ def _fill_from_tradingview(items: dict[str, SpecialItem]) -> list[str]:
         it.source = "tradingview"
         if it.change_pct is None and it.price and it.previous_close:
             it.change_pct = (it.price / it.previous_close - 1.0) * 100.0
+    return missing
+
+
+# MetaTrader 5 path ---------------------------------------------------------------------
+def _fill_from_mt5(items: dict[str, SpecialItem]) -> list[str]:
+    """Fill items from the broker through MT5; returns the symbols that got no data."""
+    from . import mt5_source
+
+    rows = mt5_source.fetch_rows(list(items))
+    missing: list[str] = []
+    for s, it in items.items():
+        r = rows.get(s)
+        if not r or r.get("price") is None:
+            missing.append(s)
+            continue
+        it.price = r["price"]
+        it.day_high, it.day_low = r.get("day_high"), r.get("day_low")
+        it.change_pct = r.get("change_pct")
+        it.yesterday_high, it.yesterday_low = r.get("yesterday_high"), r.get("yesterday_low")
+        it.yesterday_close = r.get("yesterday_close")
+        it.previous_close = it.yesterday_close
+        it.sma200, it.atr = r.get("sma200"), r.get("atr")
+        it.currency = r.get("currency") or ""
+        it.quote_time = r.get("quote_time")
+        it.source = "mt5"
     return missing
 
 
@@ -293,13 +340,24 @@ def fetch_special(symbols: list[str] | None = None, thai: bool = True) -> list[S
     today = datetime.now(ET).date()
 
     pending = dict(items)
-    if config.SPECIAL_DATA_SOURCE == "tradingview":
+    if config.SPECIAL_DATA_SOURCE == "mt5":
         try:
-            missing = _fill_from_tradingview(pending)
+            missing = _fill_from_mt5(pending)
         except Exception as exc:  # noqa: BLE001
-            log.warning("TradingView failed for the special watchlist (%s); trying Yahoo", exc)
+            log.warning("MT5 failed for the special watchlist (%s); trying TradingView", exc)
             missing = list(pending)
         pending = {s: items[s] for s in missing}
+    if pending and config.SPECIAL_DATA_SOURCE in ("tradingview", "mt5"):
+        # TradingView symbols may differ from the configured (MT5) names; map and map back
+        tv_names = {s: (tradingview_equivalent(s) or s) for s in pending}
+        tv_items = {tv: pending[s] for s, tv in tv_names.items()}
+        try:
+            missing_tv = _fill_from_tradingview(tv_items)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("TradingView failed for the special watchlist (%s); trying Yahoo", exc)
+            missing_tv = list(tv_items)
+        back = {tv: s for s, tv in tv_names.items()}
+        pending = {back[tv]: items[back[tv]] for tv in missing_tv}
     if pending:
         try:
             _fill_from_yahoo(pending, today)

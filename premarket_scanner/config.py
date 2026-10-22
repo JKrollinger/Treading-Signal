@@ -71,11 +71,21 @@ TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate h
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
 # tradingview = real-time quotes from TradingView (symbols like OANDA:XAUUSD, FX:EURUSD, BITSTAMP:BTCUSD)
 # yahoo       = Yahoo Finance (symbols like EURUSD=X, GC=F, BTC-USD)
+# mt5         = your broker's prices through the MetaTrader 5 terminal running on this PC
+#               (broker symbol names such as XAUUSD, EURUSD, BTCUSD)
 SPECIAL_DATA_SOURCE: str = _env_str("SPECIAL_DATA_SOURCE", "tradingview").lower()
 _DEFAULT_WATCHLIST = {
     "tradingview": "FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD",
     "yahoo": "EURUSD=X,GBPUSD=X,USDJPY=X,USDTHB=X,GC=F,BTC-USD",
+    "mt5": "EURUSD,GBPUSD,USDJPY,XAUUSD,BTCUSD",
 }
+
+# MetaTrader 5 (optional; leave login fields empty to attach to the already logged-in terminal)
+MT5_PATH: str = _env_str("MT5_PATH", "")            # full path to terminal64.exe, empty = auto
+MT5_LOGIN: int = _env_int("MT5_LOGIN", 0)
+MT5_PASSWORD: str = _env_str("MT5_PASSWORD", "")
+MT5_SERVER: str = _env_str("MT5_SERVER", "")
+MT5_TIMEOUT_MS: int = _env_int("MT5_TIMEOUT_MS", 10_000)
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
     for s in _env_str("SPECIAL_WATCHLIST", _DEFAULT_WATCHLIST.get(SPECIAL_DATA_SOURCE, "")).split(",")
