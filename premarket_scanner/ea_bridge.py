@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -205,18 +206,75 @@ def fmt_request_th(row: dict, sizing: dict | None, name: str | None = None) -> s
     return "\n".join(lines)
 
 
-def fmt_result_th(r: dict) -> str:
+_SIDE_RE = re.compile(r"\b(BUY|SELL)\b")
+_SYMBOL_RE = re.compile(r"\b(?:BUY|SELL)\s+(\S+)\s+[0-9.]+\s+lots\b")
+_SLTP_RE = re.compile(r"\bSL\s+([0-9.]+)\s+TP\s+([0-9.]+)")
+
+
+def request_map() -> dict[str, dict]:
+    """Order requests by id (to give a result its side and symbol)."""
+    return {r["id"]: r for r in list_requests()}
+
+
+def _num_txt(value) -> str:
+    """'4057.71000' -> '4057.71' without losing digits the way :g can."""
+    s = str(value or "").strip()
+    return s.rstrip("0").rstrip(".") if "." in s else s
+
+
+def fmt_result_th(r: dict, req: dict | None = None, compact: bool = False) -> str:
+    """EA outcome in Thai with the same 🟢 BUY / 🔴 SELL badge and arrows as the other messages.
+
+    ``req`` is the matching order request (looked up by id when not given); the side and
+    symbol fall back to the EA's own message ("BUY XAUUSD 0.01 lots SL .. TP ..").
+    ``compact`` joins the lines with " | " for list views such as /orders.
+    """
     status = r.get("status", "")
     icon = {"FILLED": "✅", "DRYRUN": "🧪", "REJECTED": "⛔", "FAILED": "⛔", "EXPIRED": "⏱"}.get(status, "ℹ️")
     label = {"FILLED": "EA เปิดไม้แล้ว", "DRYRUN": "EA ตรวจรายการผ่าน (โหมดทดสอบ ยังไม่ส่งคำสั่ง)",
              "REJECTED": "EA ปฏิเสธรายการ", "FAILED": "EA ส่งคำสั่งไม่สำเร็จ", "EXPIRED": "รายการหมดอายุก่อน EA รับ"}.get(status, status)
-    bits = [f"{icon} {label}: รหัส {r.get('id')}"]
-    if r.get("ticket") and r.get("ticket") != "0":
-        bits.append(f"ticket {r['ticket']}")
-    if r.get("price") and r.get("price") != "0":
-        bits.append(f"ราคา {r['price']}")
+    if req is None:
+        try:
+            req = request_map().get(r.get("id", ""))
+        except OSError:
+            req = None
+    message = r.get("message") or ""
+    side = (req or {}).get("side") or (m.group(1) if (m := _SIDE_RE.search(message)) else "")
+    symbol = (req or {}).get("symbol") or (m.group(1) if (m := _SYMBOL_RE.search(message)) else "")
+
+    head = f"{icon} {label}"
+    what = []
+    if symbol:
+        from . import special  # local import: special pulls in the data sources
+        name = special.display_name(symbol, True)
+        what.append(f"{name} ({symbol})" if name and name != symbol else symbol)
+    if side:
+        what.append(trade_fmt.badge(side))
     if r.get("lots"):
-        bits.append(f"{r['lots']} ล็อต")
-    if r.get("message"):
-        bits.append(r["message"])
-    return " | ".join(bits)
+        what.append(f"{_num_txt(r['lots'])} ล็อต")
+    lines = [head + (": " + " ".join(what) if what else "")]
+
+    sltp = _SLTP_RE.search(message)
+    if status in ("FILLED", "DRYRUN") and (sltp or req):
+        # the EA prints S/L and T/P with the symbol's digits; show the fill price the same way
+        sl = sltp.group(1) if sltp else _num_txt(req.get("sl"))
+        tp = sltp.group(2) if sltp else _num_txt(req.get("tp"))
+        decimals = len(sl.split(".")[1]) if sltp and "." in sl else None
+        tp_txt = tp if tp and float(tp) else "ไม่ตั้ง"
+        price_lbl = "ราคาเข้า" if status == "FILLED" else "ราคาตอนตรวจ"
+        parts = []
+        if r.get("price") and r.get("price") != "0":
+            price = f"{float(r['price']):.{decimals}f}" if decimals is not None else _num_txt(r["price"])
+            parts.append(f"{trade_fmt.ENTRY} {price_lbl} {price}")
+        parts.append(f"{trade_fmt.stop_arrow(side)} S/L {sl}")
+        parts.append(f"{trade_fmt.tp_arrow(side)} T/P {tp_txt}")
+        lines.append(" | ".join(parts))
+    elif message:
+        lines.append(f"สาเหตุ: {message}")
+
+    ids = []
+    if r.get("ticket") and r.get("ticket") != "0":
+        ids.append(f"ticket {r['ticket']}")
+    ids.append(f"รหัสรายการ {r.get('id')}")
+    lines.append(" | ".join(ids))
+    return (" | " if compact else "\n").join(lines)

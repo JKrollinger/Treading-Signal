@@ -126,6 +126,7 @@ def status_text() -> str:
 def orders_text() -> str:
     pend = ea_bridge.pending_requests()
     res = ea_bridge.list_results()[-5:]
+    reqs = ea_bridge.request_map()
     lines = [f"สถานะ EA: {ea_bridge.ea_status_th()}", f"โฟลเดอร์ไฟล์: {ea_bridge.files_dir()}"]
     lines.append(f"รายการรอ EA: {len(pend)}")
     for r in pend[-5:]:
@@ -134,7 +135,7 @@ def orders_text() -> str:
                      f"({r['created_utc']} UTC)")
     lines.append(f"ผลล่าสุดจาก EA: {len(res)} รายการ")
     for r in res:
-        lines.append("  • " + ea_bridge.fmt_result_th(r))
+        lines.append("  • " + ea_bridge.fmt_result_th(r, reqs.get(r["id"]), compact=True))
     return "\n".join(lines)
 
 
@@ -237,7 +238,9 @@ def _remove_buttons(token: str, msg: dict) -> None:
 
 
 def report_ea_results(send: bool = True) -> list[str]:
-    texts = [ea_bridge.fmt_result_th(r) for r in ea_bridge.read_new_results()]
+    fresh = ea_bridge.read_new_results()
+    reqs = ea_bridge.request_map() if fresh else {}
+    texts = [ea_bridge.fmt_result_th(r, reqs.get(r["id"])) for r in fresh]
     if send:
         for t in texts:
             tg.send_message(t, admin_only=True)
