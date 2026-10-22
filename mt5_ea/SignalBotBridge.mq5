@@ -20,6 +20,9 @@
 #property version   "1.00"
 #property strict
 
+#include <Trade\Trade.mqh>
+CTrade trade;
+
 input int    InpMaxPositions  = 3;      // max open positions in total
 input int    InpMaxAgeMinutes = 15;     // ignore requests older than this
 input int    InpPollSeconds   = 5;      // how often to read orders.csv
@@ -189,10 +192,15 @@ void HandleRequest(string id, string createdUtc, string symbol, string side,
    // and magic number InpMagic (the MQL5 reference documents CTrade::Buy for this).
    // Set `sent` to the call's result, `ticket` to the resulting order/position ticket and
    // `price` to the fill price, or put the error text into `err`.
-   bool   sent   = false;
-   ulong  ticket = 0;
-   double price  = ask;
-   string err    = "order code not added yet";
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(20);
+   bool   sent   = trade.Buy(lots, symbol, 0.0, sl, tp, "signalbot " + id);
+   uint   rc     = trade.ResultRetcode();
+   if(sent && rc != TRADE_RETCODE_DONE && rc != TRADE_RETCODE_PLACED && rc != TRADE_RETCODE_DONE_PARTIAL)
+      sent = false;
+   ulong  ticket = sent ? trade.ResultOrder() : 0;
+   double price  = sent ? trade.ResultPrice() : ask;
+   string err    = "retcode " + IntegerToString(rc) + " " + trade.ResultRetcodeDescription();
    // >>> END <<<
 
    if(sent) WriteResult(id, "FILLED", ticket, price, lots, plan);

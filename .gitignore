@@ -8,3 +8,4 @@ logs/
 graphify-out/
 *.exe
 mt5setup.exe
+*.ex5

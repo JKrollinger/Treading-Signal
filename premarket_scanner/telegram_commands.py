@@ -1,7 +1,7 @@
 """Telegram buttons and commands (owner only), via long polling.
 
 * "✅ ยืนยันเข้าเทรด" on a signal -> order request written for the EA (see ea_bridge)
-* "🧪 ทดสอบ EA"            -> a tiny dry-run request so the EA pipeline can be checked
+* "🧪 ทดสอบ EA"            -> a minimum-lot request (a real demo position once the EA's InpDryRun is false)
 * /status                   -> account section      /orders -> requests, results, EA heartbeat
 * EA results (results.csv) are reported as they appear.
 
@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 
 STALE_UPDATE_SECONDS = 600
 RESULTS_POLL_SECONDS = 10
+FAST_POLL_TIMEOUT = 3            # seconds per poll/result check right after a button press
+FAST_POLL_WINDOW_SECONDS = 90
 
 
 def offset_file():
@@ -112,9 +114,9 @@ def test_request(symbol: str) -> str:
     entry, atr = float(r["price"]), float(r["atr"])
     sl, tp = entry - atr, entry + atr
     sizing = ea_bridge.compute_lots(symbol, entry, sl) or {}
-    row = ea_bridge.write_order_request(symbol, "BUY", sizing.get("volume_min") or 0.01, sl, tp, entry, comment="test dryrun")
+    row = ea_bridge.write_order_request(symbol, "BUY", sizing.get("volume_min") or 0.01, sl, tp, entry, comment="test")
     text = ea_bridge.fmt_request_th(row, None, name)
-    return "🧪 รายการทดสอบ (EA ต้องอยู่ในโหมด DryRun จึงจะไม่เปิดไม้จริง)\n" + text
+    return "🧪 รายการทดสอบล็อตต่ำสุด (ถ้า EA ปิดโหมด DryRun อยู่ จะเปิดไม้จริงบนพอร์ต)\n" + text
 
 
 def status_text() -> str:
@@ -141,7 +143,7 @@ HELP_TH = "\n".join([
     "📊 พอร์ต MT5 (/status)  ยอดเงิน ไม้ที่เปิด กำไรขาดทุน",
     "🔔 รายงานล่าสุด (/report)  รายงานสแกน A/B/C และพอร์ต ณ ตอนนี้",
     "📋 รายการ EA (/orders)  รายการที่ส่งให้ EA และผลล่าสุด",
-    "🧪 ทดสอบ EA (/test)  ส่งรายการทดสอบ 0.01 ล็อตให้ EA (EA ต้องเป็นโหมด DryRun)",
+    "🧪 ทดสอบ EA (/test)  ส่งรายการ 0.01 ล็อตให้ EA (ถ้า EA ปิดโหมด DryRun จะเปิดไม้จริง)",
     "/menu  เรียกเมนูกลับมา",
     "ปุ่มบนข้อความสัญญาณ: ยืนยันเข้าเทรด = เขียนรายการสั่งซื้อให้ EA | ข้าม = ไม่ทำอะไร",
 ])
@@ -246,13 +248,15 @@ def report_ea_results(send: bool = True) -> list[str]:
 def _loop() -> None:
     offset = _load_offset()
     last_results = 0.0
+    fast_until = 0.0  # poll quickly for a while after an update so EA results arrive fast
     while True:
         token, chat_id = tg.credentials()
         if not token or not chat_id:
             time.sleep(30)
             continue
         try:
-            params = {"timeout": 25, "allowed_updates": ["message", "callback_query"]}
+            fast = time.time() < fast_until
+            params = {"timeout": FAST_POLL_TIMEOUT if fast else 25, "allowed_updates": ["message", "callback_query"]}
             if offset is not None:
                 params["offset"] = offset
             updates = tg.api_call("getUpdates", token, **params) or []
@@ -269,6 +273,7 @@ def _loop() -> None:
                 log.info("telegram update %s: %s", upd["update_id"],
                          "button " + str((upd.get("callback_query") or {}).get("data")) if "callback_query" in upd
                          else "message " + str((upd.get("message") or {}).get("text"))[:40])
+                fast_until = time.time() + FAST_POLL_WINDOW_SECONDS
                 try:
                     handle_update(upd, send=True)
                 except Exception:  # noqa: BLE001
@@ -276,7 +281,8 @@ def _loop() -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("telegram polling error: %s", exc)
             time.sleep(10)
-        if time.time() - last_results >= RESULTS_POLL_SECONDS:
+        interval = FAST_POLL_TIMEOUT if time.time() < fast_until else RESULTS_POLL_SECONDS
+        if time.time() - last_results >= interval:
             last_results = time.time()
             try:
                 report_ea_results(send=True)
