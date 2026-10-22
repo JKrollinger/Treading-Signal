@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from premarket_scanner import config, report, scanner, special_watch, strategy, tv_webhook
+from premarket_scanner import config, report, scanner, special_watch, strategy, tunnel, tv_webhook
 from premarket_scanner import telegram_notify as tg
 
 log = logging.getLogger("scheduler")
@@ -210,9 +210,12 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Telegram delivery: %s", "configured" if tg.is_configured() else "NOT configured (run telegram_setup.py --save)")
     if config.TV_WEBHOOK_ENABLED:
         try:
-            tv_webhook.start_in_background()
+            server = tv_webhook.start_in_background()
         except OSError as exc:
+            server = None
             log.error("TradingView webhook server could not start on port %d: %s", config.TV_WEBHOOK_PORT, exc)
+        if server is not None and config.TUNNEL_ENABLED:
+            tunnel.start_in_background(config.TV_WEBHOOK_PORT)
 
     if args.run_now:
         for job in jobs:

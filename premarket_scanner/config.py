@@ -87,6 +87,10 @@ TV_WEBHOOK_ENABLED: bool = _env_bool("TV_WEBHOOK_ENABLED", True)
 TV_WEBHOOK_BIND: str = _env_str("TV_WEBHOOK_BIND", "127.0.0.1")   # local only; expose via a tunnel
 TV_WEBHOOK_PORT: int = _env_int("TV_WEBHOOK_PORT", 8787)
 TV_WEBHOOK_SECRET: str = _env_str("TV_WEBHOOK_SECRET", "")        # required in the URL (?key=) or JSON "secret"
+# Cloudflare quick tunnel started by the scheduler so TradingView can reach the webhook
+TUNNEL_ENABLED: bool = _env_bool("TUNNEL_ENABLED", True)
+CLOUDFLARED_PATH: str = _env_str("CLOUDFLARED_PATH", "")          # empty = auto-detect
+TUNNEL_NOTIFY: bool = _env_bool("TUNNEL_NOTIFY", True)            # Telegram message when the URL changes
 # Watch mode: check every few minutes, alert immediately on a new entry signal
 SPECIAL_WATCH_ENABLED: bool = _env_bool("SPECIAL_WATCH_ENABLED", True)
 SPECIAL_WATCH_INTERVAL_MIN: int = _env_int("SPECIAL_WATCH_INTERVAL_MIN", 5)

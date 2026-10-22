@@ -115,21 +115,21 @@ in your `.env`), either as `?key=SECRET` in the URL or as a `"secret"` field in 
 Everything received is forwarded to Telegram and logged to
 `output/tradingview_alerts_<date>.json`.
 
-1. **Expose the port to the internet** (TradingView must reach it). Simplest free option,
-   no account, new random URL every start:
+1. **Expose the port to the internet** (TradingView must reach it). With `cloudflared`
+   installed (`winget install Cloudflare.cloudflared`) and `TUNNEL_ENABLED=true` the
+   scheduler starts a Cloudflare quick tunnel itself, keeps it alive, writes the public
+   address to `data/tunnel_url.txt` and **sends the complete webhook URL to Telegram**
+   every time it changes (it changes on every restart; no account needed). Print it any
+   time with:
 
    ```bash
-   winget install Cloudflare.cloudflared
+   .venv\Scripts\python tunnel_url.py
    ```
 
-   ```bash
-   cloudflared tunnel --url http://127.0.0.1:8787
-   ```
-
-   It prints a URL like `https://random-words.trycloudflare.com`. For a fixed URL create a
-   free Cloudflare account and a named tunnel (`cloudflared tunnel login`,
-   `cloudflared tunnel create signalbot`, route a hostname), or use ngrok (free account,
-   one static domain). Keep the tunnel running alongside the scheduler.
+   For a fixed URL create a free Cloudflare account and a named tunnel
+   (`cloudflared tunnel login`, `cloudflared tunnel create signalbot`, route a hostname),
+   or use ngrok (free account, one static domain); then set `TUNNEL_ENABLED=false` and run
+   that tunnel yourself.
 
 2. **Create the alert in TradingView.** Open a chart (1 or 5 minutes), add the
    `Trend-join Long` indicator from `tradingview/trend_join_long.pine`, click the alarm
@@ -416,6 +416,9 @@ overwrites that day's file.
 | `TV_WEBHOOK_ENABLED` | `true` | Start the TradingView webhook receiver with the scheduler. |
 | `TV_WEBHOOK_BIND` / `TV_WEBHOOK_PORT` | `127.0.0.1` / `8787` | Where the receiver listens (expose it with a tunnel). |
 | `TV_WEBHOOK_SECRET` | generated | Shared secret TradingView must send (`?key=` or JSON `secret`). |
+| `TUNNEL_ENABLED` | `true` | Scheduler starts a Cloudflare quick tunnel to the webhook port. |
+| `CLOUDFLARED_PATH` | empty | Path to `cloudflared.exe` if auto-detection fails. |
+| `TUNNEL_NOTIFY` | `true` | Send the new webhook URL to Telegram when the tunnel address changes. |
 | `SPECIAL_WATCH_ENABLED` | `true` | Watch mode: entry alerts every few minutes, all day. |
 | `SPECIAL_WATCH_INTERVAL_MIN` | `5` | Minutes between watch checks. |
 | `ATR_PERIOD` | `14` | Days in the average true range used for the stop. |
@@ -478,5 +481,7 @@ premarket_scanner/
   translate.py          English -> Thai headline translation with disk cache
 special_watch_once.py   one manual Scanner C check (--status / --no-send)
 tv_webhook_server.py    run the webhook receiver alone, or --test to post a sample alert
+tunnel_url.py           print (or --send to Telegram) the current TradingView webhook URL
+premarket_scanner/tunnel.py   Cloudflare quick tunnel supervisor used by the scheduler
 output/                 daily JSON files (premarket_scan_<date>.json, trend_join_<date>.json)
 ```
