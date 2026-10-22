@@ -223,6 +223,9 @@ def main(argv: list[str] | None = None) -> int:
             log.error("TradingView webhook server could not start on port %d: %s", config.TV_WEBHOOK_PORT, exc)
         if server is not None and config.TUNNEL_ENABLED:
             tunnel.start_in_background(config.TV_WEBHOOK_PORT)
+    if config.TELEGRAM_COMMANDS_ENABLED:
+        from premarket_scanner import telegram_commands
+        telegram_commands.start_in_background()
 
     if args.run_now:
         for job in jobs:

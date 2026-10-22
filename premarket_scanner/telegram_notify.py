@@ -99,7 +99,8 @@ def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
     return chunks
 
 
-def send_message(text: str, admin_only: bool = False, extras_only: bool = False) -> bool:
+def send_message(text: str, admin_only: bool = False, extras_only: bool = False,
+                 reply_markup: dict | None = None) -> bool:
     """Send to the owner chat and, unless ``admin_only``, to every extra group/channel.
 
     System messages (tunnel URL with the secret, failure notes, the account report) must
@@ -120,8 +121,12 @@ def send_message(text: str, admin_only: bool = False, extras_only: bool = False)
     ok = True
     for target in targets:
         try:
-            for chunk in split_message(text):
-                api_call("sendMessage", token, chat_id=target, text=chunk, disable_web_page_preview=True)
+            chunks = split_message(text)
+            for i, chunk in enumerate(chunks):
+                params = {"chat_id": target, "text": chunk, "disable_web_page_preview": True}
+                if reply_markup and i == len(chunks) - 1 and target == chat_id:
+                    params["reply_markup"] = reply_markup          # buttons only on the owner's copy
+                api_call("sendMessage", token, **params)
         except Exception as exc:  # noqa: BLE001
             ok = False
             log.error("Telegram send to %s failed: %s", target, exc)

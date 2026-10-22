@@ -293,6 +293,7 @@ def run_watch(
         items = special.fetch_special(thai=thai)
     stale_after = timedelta(minutes=config.STALE_QUOTE_MIN)
     messages: list[str] = []
+    keyboards: dict[int, dict] = {}        # index in ``messages`` -> inline keyboard (owner only)
     stamp = now.isoformat(timespec="seconds")
 
     for it in items:
@@ -320,6 +321,9 @@ def run_watch(
                 rec = _record(it, now)
                 state[it.symbol] = rec
                 messages.append(fmt_new(rec, thai))
+                if config.EA_BRIDGE_ENABLED and it.source == "mt5":
+                    from . import telegram_commands
+                    keyboards[len(messages) - 1] = telegram_commands.signal_keyboard(it.symbol, rec["date"])
                 log.info("%s: NEW signal entry=%s stop=%s partial=%s", it.symbol, rec["entry"], rec["stop"], rec["partial_level"])
             continue
 
@@ -360,6 +364,11 @@ def run_watch(
             log.warning("could not write %s: %s", day_file(today), exc)
 
     if send:
-        for m in messages:
-            tg.send_message(m)
+        for i, m in enumerate(messages):
+            kb = keyboards.get(i)
+            if kb:
+                tg.send_message(m, admin_only=True, reply_markup=kb)   # owner gets the buttons
+                tg.send_message(m, extras_only=True)                  # groups get plain text
+            else:
+                tg.send_message(m)
     return messages

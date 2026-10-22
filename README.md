@@ -191,6 +191,36 @@ a "📗" note when a position appears (warning if it has no stop-loss) and a "�
 when one disappears, with the close price, the reason (stop loss, take profit, manual)
 and the realised profit. The bot never places, modifies or closes orders.
 
+## Confirm-to-trade button and the EA bridge
+
+The bot itself never sends orders. Instead, with `EA_BRIDGE_ENABLED=true`, the owner's
+copy of every new Scanner C signal (for symbols quoted through MT5) carries two buttons:
+**✅ ยืนยันเข้าเทรด (ส่งให้ EA)** and **❌ ข้าม**. Pressing confirm appends an order request
+to `<MT5 Common data>\Files\signalbot\orders.csv` (`id, created_utc, symbol, side, lots,
+sl, tp, entry_ref, comment`): BUY, lot size computed so that the distance to the stop
+risks `EA_RISK_PCT` of the balance (tick value from the broker), S/L = the signal's initial
+stop, T/P = entry + `EA_TP_R` x risk. The reply shows the request and whether the EA is
+alive (`heartbeat.txt`). Only the owner's Telegram user can press the buttons; the bot
+persists the update offset so a restart never replays old presses.
+
+Telegram commands (owner only): `/status` (account section), `/orders` (pending requests,
+latest EA results, EA heartbeat), `/test [SYMBOL]` (a minimum-lot dry-run request to check
+the pipeline), `/help`.
+
+`mt5_ea/SignalBotBridge.mq5` is the Expert Advisor skeleton that completes the loop:
+every `InpPollSeconds` it reads `orders.csv`, skips ids listed in `processed.txt`, checks
+age, symbol, position limits, lot step/min/max (and `InpMaxLots`), minimum stop distance
+and AutoTrading, then writes `results.csv` (`id, processed_utc, status, ticket, price,
+lots, message`) which the bot reports to Telegram within seconds. **The order-sending
+line is deliberately left out**: look for `>>> ADD ORDER CODE HERE <<<` in
+`HandleRequest()` and add it yourself (CTrade::Buy in the MQL5 reference). Until then,
+and while `InpDryRun = true`, the EA only validates and reports `DRYRUN`.
+
+Install the EA: MetaEditor (IDE button in MT5) > File > Open the .mq5 > Compile (F7) >
+drag it from Navigator > Expert Advisors onto any chart > tick "Allow Algo Trading" > press
+the AutoTrading toolbar button. Keep `InpDryRun = true` until a `/test` request comes back
+as `DRYRUN` in Telegram and you have reviewed the plan it prints.
+
 ## Backtest of the Trend-join Long rules
 
 `backtest_trend_join.py` replays the rules on hourly history: yesterday's close above the
@@ -516,6 +546,12 @@ overwrites that day's file.
 | `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
 | `PORTFOLIO_ENABLED` | `true` | Account section in the owner's report and open/close position alerts. |
 | `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
+| `EA_BRIDGE_ENABLED` | `true` | Confirm button on MT5-quoted signals; order requests written for the EA. |
+| `EA_FILES_DIR` | empty | Override the request/result folder (default `<MT5 Common>\Files\signalbot`). |
+| `EA_RISK_PCT` | `1.0` | Percent of balance risked to the stop when sizing a request. |
+| `EA_TP_R` | `1.0` | Take-profit written to the request, in R (0 = none; the bot still trails). |
+| `EA_REQUEST_MAX_AGE_MIN` | `15` | Informational; the EA's `InpMaxAgeMinutes` enforces it. |
+| `TELEGRAM_COMMANDS_ENABLED` | `true` | Long-poll Telegram for button presses and /commands. |
 | `SPECIAL_WATCHLIST` | `FX:EURUSD,FX:GBPUSD,FX:USDJPY,FX_IDC:USDTHB,OANDA:XAUUSD,BITSTAMP:BTCUSD` | Symbols for Scanner C, in the style of the chosen source. |
 | `TV_WEBHOOK_ENABLED` | `true` | Start the TradingView webhook receiver with the scheduler. |
 | `TV_WEBHOOK_BIND` / `TV_WEBHOOK_PORT` | `127.0.0.1` / `8787` | Where the receiver listens (expose it with a tunnel). |
@@ -600,6 +636,9 @@ backtest_trend_join.py  replay the Trend-join Long rules on hourly history (Yaho
 premarket_scanner/tunnel.py       Cloudflare quick tunnel supervisor used by the scheduler
 premarket_scanner/mt5_source.py   MetaTrader 5 prices, levels and hourly history (read-only)
 premarket_scanner/mt5_portfolio.py account snapshot + position opened/closed alerts (read-only)
+premarket_scanner/ea_bridge.py    order request / result files for the EA, risk-based lot sizing
+premarket_scanner/telegram_commands.py  owner-only buttons and /commands (long polling)
+mt5_ea/SignalBotBridge.mq5        Expert Advisor skeleton that reads requests and writes results (no order line)
 premarket_scanner/filters.py      session / Friday / news filters shared by live watch and backtest
 premarket_scanner/backtest.py     backtest engine and reports
 output/                 daily JSON files (premarket_scan_<date>.json, trend_join_<date>.json)

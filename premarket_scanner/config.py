@@ -90,6 +90,14 @@ MT5_TIMEOUT_MS: int = _env_int("MT5_TIMEOUT_MS", 10_000)
 # Read-only portfolio report (your MT5 account: open positions, floating P/L, closes)
 PORTFOLIO_ENABLED: bool = _env_bool("PORTFOLIO_ENABLED", True)
 PORTFOLIO_TO_GROUP: bool = _env_bool("PORTFOLIO_TO_GROUP", False)   # false = owner chat only
+
+# EA bridge: Telegram "confirm" button -> order request file -> your Expert Advisor in MT5
+EA_BRIDGE_ENABLED: bool = _env_bool("EA_BRIDGE_ENABLED", True)
+EA_FILES_DIR: str = _env_str("EA_FILES_DIR", "")              # empty = <MT5 Common>\Files\signalbot
+EA_RISK_PCT: float = _env_float("EA_RISK_PCT", 1.0)            # % of balance risked per trade (lot sizing)
+EA_TP_R: float = _env_float("EA_TP_R", 1.0)                    # take-profit written to the request, in R (0 = none)
+EA_REQUEST_MAX_AGE_MIN: int = _env_int("EA_REQUEST_MAX_AGE_MIN", 15)
+TELEGRAM_COMMANDS_ENABLED: bool = _env_bool("TELEGRAM_COMMANDS_ENABLED", True)   # buttons + /status /orders
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
     for s in _env_str("SPECIAL_WATCHLIST", _DEFAULT_WATCHLIST.get(SPECIAL_DATA_SOURCE, "")).split(",")
