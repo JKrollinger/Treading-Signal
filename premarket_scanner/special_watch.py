@@ -118,6 +118,146 @@ def add_trading_days(d: date, n: int) -> date:
     return d
 
 
+# Signal numbers and results log (compact style) ------------------------------------
+def _aux_path(state_path: Path | None, name: str) -> Path:
+    return (state_path.parent if state_path else config.DATA_DIR) / name
+
+
+def next_signal_no(state_path: Path | None = None) -> int:
+    """Running signal number (#1, #2, ...) kept in data/signal_seq.json."""
+    path = _aux_path(state_path, "signal_seq.json")
+    last = 0
+    try:
+        last = int(json.loads(path.read_text(encoding="utf-8")).get("last", 0))
+    except (OSError, ValueError, TypeError):
+        last = 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"last": last + 1}), encoding="utf-8")
+    return last + 1
+
+
+def record_result(rec: dict, state_path: Path | None = None) -> None:
+    """Append a finished signal to data/signal_results.jsonl (feeds the WIN/LOSS tally)."""
+    row = {k: rec.get(k) for k in ("no", "symbol", "date", "entry", "initial_stop", "status", "result_r", "closed_at")}
+    row["side"] = "buy"
+    path = _aux_path(state_path, "signal_results.jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def outcome(r: float | None) -> str:
+    if r is None:
+        return "open"
+    return "win" if r > 0.05 else ("loss" if r < -0.05 else "flat")
+
+
+def scoreboard(now: datetime, days: int = 30, state_path: Path | None = None) -> dict:
+    """WIN/LOSS count and total R of signals closed in the last ``days`` days."""
+    path = _aux_path(state_path, "signal_results.jsonl")
+    since = (now - timedelta(days=days)).isoformat()
+    out = {"win": 0, "loss": 0, "flat": 0, "total_r": 0.0, "days": days}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (row.get("closed_at") or "") < since or row.get("result_r") is None:
+            continue
+        out[outcome(float(row["result_r"]))] += 1
+        out["total_r"] += float(row["result_r"])
+    return out
+
+
+def _compact() -> bool:
+    return config.ALERT_STYLE != "detailed"
+
+
+def _px(v) -> str:
+    """Exact price for entries/exits: 4,057.71 / 157.117 / 1.12136."""
+    if v is None:
+        return "n/a"
+    v = float(v)
+    decimals = 2 if abs(v) >= 1000 else (3 if abs(v) >= 100 else (4 if abs(v) >= 10 else 5))
+    return f"{v:,.{decimals}f}"
+
+
+def _tag(rec: dict) -> str:
+    return f"#{rec['no']} {rec['symbol']}" if rec.get("no") else rec["symbol"]
+
+
+def fmt_score(sb: dict, thai: bool) -> str:
+    n = sb["win"] + sb["loss"] + sb["flat"]
+    if not n:
+        return ""
+    flat = (f" เสมอ {sb['flat']}" if thai else f" {sb['flat']} flat") if sb["flat"] else ""
+    if thai:
+        return f"📊 {sb['days']} วันล่าสุด: {sb['win']} WIN {sb['loss']} LOSS{flat} | รวม {sb['total_r']:+.1f}R"
+    return f"📊 last {sb['days']} days: {sb['win']} WIN {sb['loss']} LOSS{flat} | total {sb['total_r']:+.1f}R"
+
+
+def compact_new(rec: dict, thai: bool) -> str:
+    expires = date.fromisoformat(rec["expires_on"]).strftime("%d/%m")
+    if thai:
+        return "\n".join([
+            f"🔔 {_tag(rec)} {BUY_BADGE} | {rec['name']}",
+            f"{trade_fmt.ENTRY} เข้า {_px(rec['entry'])}",
+            f"{trade_fmt.UP} TP1 {_px(rec['partial_level'])} (+{rec['partial_r']:g}R ปิดครึ่ง)",
+            f"{DOWN} SL {_px(rec['initial_stop'])} (-1R)",
+            f"ที่เหลือเลื่อน SL ตามราคา | ปิดไม่เกิน {expires}",
+            "ข้อมูลอัตโนมัติ ไม่ใช่คำแนะนำการลงทุน",
+        ])
+    return "\n".join([
+        f"🔔 {_tag(rec)} {BUY_BADGE} | {rec['name']}",
+        f"{trade_fmt.ENTRY} entry {_px(rec['entry'])}",
+        f"{trade_fmt.UP} TP1 {_px(rec['partial_level'])} (+{rec['partial_r']:g}R, half off)",
+        f"{DOWN} SL {_px(rec['initial_stop'])} (-1R)",
+        f"rest trails the price | close by {rec['expires_on']}",
+    ])
+
+
+def compact_partial(rec: dict, price: float, thai: bool) -> str:
+    if thai:
+        return (f"✅ {_tag(rec)} TP1 +{rec['partial_r']:g}R | ปิดครึ่งที่ {_px(price)} "
+                f"ที่เหลือถือต่อ {DOWN} SL {_px(rec['stop'])}")
+    return f"✅ {_tag(rec)} TP1 +{rec['partial_r']:g}R | half closed at {_px(price)}, rest runs, {DOWN} SL {_px(rec['stop'])}"
+
+
+def compact_trail(rec: dict, thai: bool) -> str:
+    locked = (rec["stop"] - rec["entry"]) / rec["risk"]
+    if thai:
+        return f"🔼 {_tag(rec)} เลื่อน {DOWN} SL → {_px(rec['stop'])} ({'ล็อกกำไร' if locked > 0 else 'ความเสี่ยงเหลือ'} {locked:+.2f}R)"
+    return f"🔼 {_tag(rec)} {DOWN} SL raised to {_px(rec['stop'])} ({locked:+.2f}R)"
+
+
+def compact_result(rec: dict, exit_price: float, how: str, thai: bool, score: str = "") -> str:
+    r = float(rec["result_r"] or 0.0)
+    kind = outcome(r)
+    icon, word = {"win": ("✅", "WIN"), "loss": ("❌", "LOSS"),
+                  "flat": ("➖", "เสมอตัว" if thai else "FLAT")}[kind]
+    start = datetime.fromisoformat(rec["triggered_at"])
+    end = datetime.fromisoformat(rec["closed_at"]) if rec.get("closed_at") else start
+    held_days = max(0, (end - start).days)
+    held = (f"{held_days} วัน" if held_days else "ไม่ถึงวัน") if thai else (f"{held_days}d" if held_days else "<1d")
+    lines = [f"{icon} {_tag(rec)} {BUY_BADGE} {word} {r:+.2f}R"]
+    if thai:
+        lines.append(f"{EXIT} ออก {_px(exit_price)} ({how}) | เข้า {_px(rec['entry'])} | ถือ {held}")
+    else:
+        lines.append(f"{EXIT} exit {_px(exit_price)} ({how}) | entry {_px(rec['entry'])} | held {held}")
+    if score:
+        lines.append(score)
+    return "\n".join(lines)
+
+
+def compact_weakened(rec: dict, price: float, thai: bool) -> str:
+    if thai:
+        return (f"⚠️ {_tag(rec)} ราคา {_px(price)} หลุดจุดทะลุ {_px(rec['breakout_level'])} สัญญาณอ่อนลง "
+                f"| {DOWN} SL ยัง {_px(rec['stop'])}")
+    return f"⚠️ {_tag(rec)} {_px(price)} back below {_px(rec['breakout_level'])}, weaker | {DOWN} SL {_px(rec['stop'])}"
+
+
 # Formatting -----------------------------------------------------------------------
 def _when(iso_or_dt, thai: bool, with_date: bool = False) -> str:
     """'17:08 น. ไทย' / '06:08 ET'; with_date adds the day ('22/10 17:08 น. ไทย')."""
@@ -176,6 +316,8 @@ def combined_r(rec: dict, exit_price: float) -> float:
 
 
 def fmt_new(rec: dict, thai: bool) -> str:
+    if _compact():
+        return compact_new(rec, thai)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     trail_dist = rec["trail_atr_mult"] * rec["atr"]
@@ -205,6 +347,8 @@ def fmt_new(rec: dict, thai: bool) -> str:
 
 
 def fmt_partial(rec: dict, price: float, thai: bool) -> str:
+    if _compact():
+        return compact_partial(rec, price, thai)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     if thai:
@@ -215,6 +359,8 @@ def fmt_partial(rec: dict, price: float, thai: bool) -> str:
 
 
 def fmt_trail(rec: dict, thai: bool) -> str:
+    if _compact():
+        return compact_trail(rec, thai)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     locked = (rec["stop"] - rec["entry"]) / rec["risk"]
@@ -226,7 +372,11 @@ def fmt_trail(rec: dict, thai: bool) -> str:
             f"(highest {fp(rec['highest'])}, {locked:+.2f}R locked on the remainder)")
 
 
-def fmt_stopped(rec: dict, price: float, thai: bool) -> str:
+def fmt_stopped(rec: dict, price: float, thai: bool, score: str = "") -> str:
+    if _compact():
+        trailed = rec["stop"] > rec["initial_stop"]
+        how = ("SL เลื่อนตาม" if trailed else "SL") if thai else ("trailing SL" if trailed else "SL")
+        return compact_result(rec, rec["stop"], how, thai, score)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     r = combined_r(rec, rec["stop"])
@@ -239,7 +389,10 @@ def fmt_stopped(rec: dict, price: float, thai: bool) -> str:
             f"combined result {r:+.2f}R (signal {t})")
 
 
-def fmt_expired(rec: dict, price: float, thai: bool) -> str:
+def fmt_expired(rec: dict, price: float, thai: bool, score: str = "") -> str:
+    if _compact():
+        how = f"ครบ {rec['max_hold_days']} วันทำการ" if thai else f"{rec['max_hold_days']} trading days"
+        return compact_result(rec, price, how, thai, score)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     r = combined_r(rec, price)
@@ -252,6 +405,9 @@ def fmt_expired(rec: dict, price: float, thai: bool) -> str:
 
 def fmt_held(it: SpecialItem, reason: str, thai: bool) -> str:
     c = it.currency
+    if _compact():
+        return (f"⏸ {it.symbol} {BUY_BADGE} ยังไม่นับ: {reason}" if thai
+                else f"⏸ {it.symbol} {BUY_BADGE} held: {reason}")
     if thai:
         return (f"⏸ {it.name} ({it.symbol}) เข้าเงื่อนไข {BUY_BADGE} ที่ {fmt_price(it.price, c)} แต่ยังไม่นับ "
                 f"เพราะ{reason} (แจ้งวันละครั้ง นับใหม่เมื่อพ้นช่วงนี้)")
@@ -259,6 +415,8 @@ def fmt_held(it: SpecialItem, reason: str, thai: bool) -> str:
 
 
 def fmt_weakened(rec: dict, price: float, thai: bool) -> str:
+    if _compact():
+        return compact_weakened(rec, price, thai)
     c = rec.get("currency", "")
     fp = lambda v: fmt_price(v, c)  # noqa: E731
     t = _when(rec["triggered_at"], thai, with_date=True)
@@ -319,6 +477,7 @@ def run_watch(
                     log.info("%s: signal held back: %s", it.symbol, reason)
                     continue
                 rec = _record(it, now)
+                rec["no"] = next_signal_no(state_path)
                 state[it.symbol] = rec
                 add("new", fmt_new(rec, thai))
                 if config.EA_BRIDGE_ENABLED and it.source == "mt5":
@@ -335,11 +494,13 @@ def run_watch(
 
         if price <= rec["stop"]:
             rec.update(status="stopped", closed_at=stamp, result_r=combined_r(rec, rec["stop"]))
-            add("exit", fmt_stopped(rec, price, thai))
+            record_result(rec, state_path)
+            add("exit", fmt_stopped(rec, price, thai, fmt_score(scoreboard(now, state_path=state_path), thai)))
             continue
         if today > date.fromisoformat(rec["expires_on"]):
             rec.update(status="expired", closed_at=stamp, result_r=combined_r(rec, price))
-            add("exit", fmt_expired(rec, price, thai))
+            record_result(rec, state_path)
+            add("exit", fmt_expired(rec, price, thai, fmt_score(scoreboard(now, state_path=state_path), thai)))
             continue
         if not rec.get("partial_taken") and price >= rec["partial_level"]:
             rec.update(partial_taken=True, partial_price=price, partial_at=stamp, status="partial")

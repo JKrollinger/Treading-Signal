@@ -74,7 +74,10 @@ GROUP_REPORT_SECTIONS: str = _env_str("GROUP_REPORT_SECTIONS", "")      # groups
 # Alerts the groups/channels get (the owner gets all of them):
 #   new = entry signals (Scanner B stocks, Scanner C, TradingView)   exit = T/P reached, stop hit, expiry
 #   trail = trailing stop moved   weakened = back below the breakout   held = signal held by the time filter
-GROUP_ALERTS: str = _env_str("GROUP_ALERTS", "new")
+GROUP_ALERTS: str = _env_str("GROUP_ALERTS", "new,exit")
+# Scanner C alert look: compact = short signal-channel style (#no, entry, TP1, SL, WIN/LOSS
+# with a 30-day tally); detailed = the longer explanatory messages
+ALERT_STYLE: str = _env_str("ALERT_STYLE", "compact").lower()
 
 # Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
