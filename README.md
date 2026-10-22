@@ -306,8 +306,20 @@ After every scheduled run the scheduler sends one report. The owner chat gets ev
 section (`REPORT_SECTIONS`, default `A,B,C`): Scanner A (pre-market gappers), Scanner B
 (Trend-join Long hits) and Scanner C (the special watchlist: currency pairs, gold,
 bitcoin), plus the MT5 account section when that is enabled. Groups and channels in
-`TELEGRAM_EXTRA_CHAT_IDS` get only the signal section by default
-(`GROUP_REPORT_SECTIONS`, default `C`); set it to `A,B,C` to send them the full report.
+`TELEGRAM_EXTRA_CHAT_IDS` get **no periodic report** by default, only the entry alerts
+(`GROUP_ALERTS=new`): a new Scanner B stock signal, a new Scanner C signal with its
+entry, stop and T/P, and TradingView webhook alerts. Add `exit` (T/P reached, stop hit,
+expiry), `trail`, `weakened` or `held` to `GROUP_ALERTS` to pass those follow-ups on too,
+and set `GROUP_REPORT_SECTIONS` (for example `C` or `A,B,C`) to send groups a report.
+A new stock signal looks like this (stock signals carry an entry only; the stop/T/P plan
+belongs to Scanner C):
+
+```
+🔔 สัญญาณใหม่ 🟢 BUY: SPOT (Spotify Technology) หุ้นสหรัฐ 22:05 น. ไทย (11:05 ET)
+➡️ เข้า $571.20
+เหตุผล: ทะลุจุดสูงสุดเมื่อวาน $560.10 และจุดสูงสุดก่อนตลาดเปิด $565.00 ที่จุดสูงสุดของวัน แนวโน้มระยะยาวขาขึ้น
+ข้อมูลอัตโนมัติเพื่อประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน
+```
 The default language is **plain Thai** written for readers without a trading background
 (`REPORT_LANGUAGE=th`). Sections A and B list signals only, one line per ticker; the news
 headline under each ticker is off by default and comes back with `REPORT_NEWS=true`
@@ -458,9 +470,10 @@ it an administrator with "Post messages"), send any message there once, then run
 ```
 
 It finds the newest group/channel the bot was added to, stores its id in
-`TELEGRAM_EXTRA_CHAT_IDS`, and posts a test message there. Scan reports and signal alerts
-go to your chat **and** every extra chat; system messages (the webhook URL with its
-secret, failure notes) stay in your private chat only. Invite friends with the
+`TELEGRAM_EXTRA_CHAT_IDS`, and posts a test message there. Extra chats get the entry
+signals only (see `GROUP_ALERTS` and `GROUP_REPORT_SECTIONS` above); the full reports,
+follow-up alerts and system messages (the webhook URL with its secret, failure notes,
+the MT5 account) stay in your private chat. Invite friends with the
 group's/channel's invite link (Telegram: group info > Add members / Invite link). Repeat
 `--add-chat` for more chats, or edit the comma-separated list in `.env`.
 
@@ -565,7 +578,8 @@ overwrites that day's file.
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives the reports; `telegram_setup.py --save` fills it in. |
 | `REPORT_LANGUAGE` | `th` | `th` plain Thai, `en` compact English. |
 | `REPORT_SECTIONS` | `A,B,C` | Sections in the owner chat's report: `A` pre-market gappers, `B` Trend-join hits, `C` special watchlist. |
-| `GROUP_REPORT_SECTIONS` | `C` | Sections sent to the groups/channels in `TELEGRAM_EXTRA_CHAT_IDS`; signals only by default. |
+| `GROUP_REPORT_SECTIONS` | empty | Report sections sent to the groups/channels in `TELEGRAM_EXTRA_CHAT_IDS`; empty = no report, alerts only. |
+| `GROUP_ALERTS` | `new` | Alerts the groups get: `new` entry signals, `exit` T/P/stop/expiry, `trail` stop moved, `weakened`, `held`. The owner gets all. |
 | `REPORT_NEWS` | `false` | Show the news headline under each ticker in sections A and B. Off keeps the message to signals only. |
 | `TRANSLATE_NEWS` | `true` | Translate English headlines to Thai when they are shown (cached in `data/translations_th.json`). |
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |

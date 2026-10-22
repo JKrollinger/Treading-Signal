@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
-from . import config
+from . import config, trade_fmt
 
 log = logging.getLogger(__name__)
 
@@ -71,9 +71,31 @@ def parse_body(raw: bytes) -> dict:
         return {"text": text}
 
 
+def _side(data: dict) -> str | None:
+    """buy / sell from the alert: an explicit side/action field, the signal name, or the
+    stop's position relative to the price. None for exits or when it cannot be told."""
+    for v in (data.get("side"), data.get("action")):
+        t = str(v or "").strip().lower()
+        if t in ("buy", "long"):
+            return "buy"
+        if t in ("sell", "short"):
+            return "sell"
+    sig = str(data.get("signal") or data.get("name") or "").lower()
+    if "exit" in sig or "close" in sig:
+        return None
+    if "long" in sig or "buy" in sig:
+        return "buy"
+    if "short" in sig or "sell" in sig:
+        return "sell"
+    price, stop = _num(data.get("price") or data.get("close")), _num(data.get("stop"))
+    if price is not None and stop is not None and stop != price:
+        return "buy" if stop < price else "sell"
+    return None
+
+
 def format_alert(data: dict, thai: bool) -> str:
     now = datetime.now(ET)
-    when = (f"{now.astimezone(BKK).strftime('%H:%M')} น. ไทย ({now.strftime('%H:%M')} น. เวลาตลาดสหรัฐ)"
+    when = (f"{now.astimezone(BKK).strftime('%H:%M')} น. ไทย ({now.strftime('%H:%M')} ET)"
             if thai else f"{now.strftime('%H:%M')} ET ({now.astimezone(BKK).strftime('%H:%M')} Bangkok)")
     ticker = str(data.get("ticker") or data.get("symbol") or "")
     exchange = str(data.get("exchange") or "")
@@ -83,7 +105,9 @@ def format_alert(data: dict, thai: bool) -> str:
     price, stop, target = data.get("price") or data.get("close"), data.get("stop"), data.get("target")
     text = str(data.get("text") or data.get("message") or "").strip()
 
-    lines = ["📣 แจ้งเตือนจาก TradingView" if thai else "TradingView alert"]
+    side = _side(data)
+    badge = f" {trade_fmt.badge(side)}" if side else ""
+    lines = [("📣 แจ้งเตือนจาก TradingView" if thai else "TradingView alert") + badge]
     if signal or label:
         if thai:
             lines.append(f"สัญญาณ: {signal or 'ไม่ระบุ'}" + (f" | {label}" if label else "")
@@ -92,11 +116,13 @@ def format_alert(data: dict, thai: bool) -> str:
             lines.append(f"{signal or 'alert'}" + (f" | {label}" if label else "") + (f" | {interval}" if interval else ""))
     lines.append(("เวลา " if thai else "Time ") + when)
     if price not in (None, ""):
-        parts = [("ราคา: " if thai else "Price: ") + _fmt(price)]
+        stop_mark = f"{trade_fmt.stop_arrow(side)} " if side else ""
+        tp_mark = f"{trade_fmt.tp_arrow(side)} " if side else ""
+        parts = [f"{trade_fmt.ENTRY} " + ("ราคา: " if thai else "Price: ") + _fmt(price)]
         if _num(stop) is not None:
-            parts.append(("จุดตัดขาดทุน: " if thai else "Stop: ") + _fmt(stop))
+            parts.append(stop_mark + ("จุดตัดขาดทุน: " if thai else "Stop: ") + _fmt(stop))
         if _num(target) is not None:
-            parts.append(("เป้าหมาย: " if thai else "Target: ") + _fmt(target))
+            parts.append(tp_mark + ("T/P: " if thai else "T/P: ") + _fmt(target))
         lines.append(" | ".join(parts))
     if text:
         lines.append(text)
@@ -126,7 +152,7 @@ def _append_log(entry: dict) -> None:
 def _deliver(message: str, data: dict) -> None:
     from . import telegram_notify as tg
 
-    sent = tg.send_message(message)
+    sent = tg.send_alert(message, "new")   # an alert from the chart = an entry signal
     log.info("TradingView alert: %s %s -> telegram %s", data.get("signal"), data.get("ticker"),
              "sent" if sent else "NOT sent")
 

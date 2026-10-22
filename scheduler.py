@@ -113,6 +113,12 @@ def run_strategy() -> None:
         len(result["signals"]), len(result["new_signals"]), path,
     )
     print(strategy.format_table(result), flush=True)
+    if result["new_signals"] and tg.is_configured():
+        try:
+            sent = tg.send_stock_signal_alerts(datetime.now(ET).date(), result)
+            log.info("Scanner B: %d entry alert(s) sent", sent)
+        except Exception:  # noqa: BLE001 - the report still goes out
+            log.exception("Scanner B entry alerts failed")
 
 
 def run_watch() -> None:

@@ -288,7 +288,12 @@ def run_watch(
         items = special.fetch_special(thai=thai)
     stale_after = timedelta(minutes=config.STALE_QUOTE_MIN)
     messages: list[str] = []
+    kinds: list[str] = []                  # alert kind per message: new / exit / trail / weakened / held
     keyboards: dict[int, dict] = {}        # index in ``messages`` -> inline keyboard (owner only)
+
+    def add(kind: str, text: str) -> None:
+        messages.append(text)
+        kinds.append(kind)
     stamp = now.isoformat(timespec="seconds")
 
     for it in items:
@@ -310,12 +315,12 @@ def run_watch(
                     key = f"hold:{it.symbol}"
                     if state.get(key, {}).get("date") != today.isoformat():
                         state[key] = {"date": today.isoformat(), "reason": reason, "at": stamp, "symbol": it.symbol}
-                        messages.append(fmt_held(it, reason, thai))
+                        add("held", fmt_held(it, reason, thai))
                     log.info("%s: signal held back: %s", it.symbol, reason)
                     continue
                 rec = _record(it, now)
                 state[it.symbol] = rec
-                messages.append(fmt_new(rec, thai))
+                add("new", fmt_new(rec, thai))
                 if config.EA_BRIDGE_ENABLED and it.source == "mt5":
                     from . import telegram_commands
                     keyboards[len(messages) - 1] = telegram_commands.signal_keyboard(it.symbol, rec["date"])
@@ -330,21 +335,21 @@ def run_watch(
 
         if price <= rec["stop"]:
             rec.update(status="stopped", closed_at=stamp, result_r=combined_r(rec, rec["stop"]))
-            messages.append(fmt_stopped(rec, price, thai))
+            add("exit", fmt_stopped(rec, price, thai))
             continue
         if today > date.fromisoformat(rec["expires_on"]):
             rec.update(status="expired", closed_at=stamp, result_r=combined_r(rec, price))
-            messages.append(fmt_expired(rec, price, thai))
+            add("exit", fmt_expired(rec, price, thai))
             continue
         if not rec.get("partial_taken") and price >= rec["partial_level"]:
             rec.update(partial_taken=True, partial_price=price, partial_at=stamp, status="partial")
-            messages.append(fmt_partial(rec, price, thai))
+            add("exit", fmt_partial(rec, price, thai))
         elif rec["status"] == "active" and price < rec["breakout_level"]:
             rec["status"] = "weakened"
-            messages.append(fmt_weakened(rec, price, thai))
+            add("weakened", fmt_weakened(rec, price, thai))
         if rec["stop"] - float(rec.get("last_notified_stop", rec["initial_stop"])) >= config.TRAIL_NOTIFY_ATR * rec["atr"]:
             rec["last_notified_stop"] = rec["stop"]
-            messages.append(fmt_trail(rec, thai))
+            add("trail", fmt_trail(rec, thai))
 
     save_state(state, state_path)
     if state_path is None:
@@ -359,11 +364,7 @@ def run_watch(
             log.warning("could not write %s: %s", day_file(today), exc)
 
     if send:
-        for i, m in enumerate(messages):
-            kb = keyboards.get(i)
-            if kb:
-                tg.send_message(m, admin_only=True, reply_markup=kb)   # owner gets the buttons
-                tg.send_message(m, extras_only=True)                  # groups get plain text
-            else:
-                tg.send_message(m)
+        # owner: every alert (with the confirm buttons); groups: only the kinds in GROUP_ALERTS, plain text
+        for i, (m, kind) in enumerate(zip(messages, kinds)):
+            tg.send_alert(m, kind, reply_markup=keyboards.get(i))
     return messages

@@ -9,7 +9,8 @@ Every scheduled run sends one report, built from these sections in this order:
 
 Which sections an audience gets is configurable: ``REPORT_SECTIONS`` for the owner chat
 (default ``A,B,C``) and ``GROUP_REPORT_SECTIONS`` for the groups/channels in
-``TELEGRAM_EXTRA_CHAT_IDS`` (default ``C``: signals only, keeping group messages short).
+``TELEGRAM_EXTRA_CHAT_IDS`` (default empty: no periodic report). Groups get trade
+alerts instead, filtered by ``GROUP_ALERTS`` (default ``new``: entry signals only).
 
 Credentials are re-read from ``.env`` before every send, so adding the bot token or chat
 id later does not require restarting the scheduler.
@@ -558,15 +559,77 @@ def build_report_for(scan_date: date, output_dir: Path | None = None, include_po
 
 def send_report_for(scan_date: date, output_dir: Path | None = None) -> bool:
     """Send today's report: the owner's sections (plus the account section) to the owner
-    chat, the group sections to every extra group/channel. One send when both are equal."""
+    chat; the group sections, if any, to every extra group/channel. One send when both are
+    equal. With ``GROUP_REPORT_SECTIONS`` empty (the default) groups get no report at all."""
     pre = _load(report.output_path(scan_date.isoformat(), output_dir))
     strat = _load(strategy.strategy_file(scan_date, output_dir))
     owner_set, group_set = owner_sections(), group_sections()
+    if not extra_chat_ids():
+        group_set = set()
     c_lines = section_c(is_thai()) if config.SPECIAL_ENABLED and "C" in (owner_set | group_set) else None
     owner = build_report(pre, strat, include_portfolio=config.PORTFOLIO_ENABLED, sections=owner_set, c_lines=c_lines)
+    if not group_set:
+        return send_message(owner, admin_only=True)
     group = build_report(pre, strat, include_portfolio=config.PORTFOLIO_ENABLED and config.PORTFOLIO_TO_GROUP,
                          sections=group_set, c_lines=c_lines)
-    if owner == group or not extra_chat_ids():
-        return send_message(owner, admin_only=not extra_chat_ids())
+    if owner == group:
+        return send_message(owner)
     ok = send_message(owner, admin_only=True)
     return send_message(group, extras_only=True) and ok
+
+
+# Trade alerts: owner gets every kind, groups only the kinds in GROUP_ALERTS ----------
+def group_alert_kinds() -> set[str]:
+    return {s.strip().lower() for s in config.GROUP_ALERTS.split(",") if s.strip()}
+
+
+def send_alert(text: str, kind: str, owner: bool = True, reply_markup: dict | None = None) -> bool:
+    """Send one trade alert. ``kind`` is new / exit / trail / weakened / held."""
+    ok = send_message(text, admin_only=True, reply_markup=reply_markup) if owner else True
+    if kind in group_alert_kinds() and extra_chat_ids():
+        ok = send_message(text, extras_only=True) and ok
+    return ok
+
+
+def stock_signal_alerts(strat: dict | None, pre: dict | None = None) -> list[str]:
+    """One entry alert per Scanner B ticker that triggered in this run (``new_signals``)."""
+    if not strat:
+        return []
+    thai = is_thai()
+    by_ticker = {s["ticker"]: s for s in strat.get("signals") or []}
+    names = {r["ticker"]: r.get("name") for r in (pre or {}).get("results") or []}
+    out = []
+    for ticker in strat.get("new_signals") or []:
+        s = by_ticker.get(ticker)
+        if not s:
+            continue
+        label = _label(ticker, names.get(ticker))
+        entry = f"{trade_fmt.ENTRY} {'เข้า' if thai else 'entry'} {_money(s.get('entry_price'))}"
+        if thai:
+            delayed = " (ราคาอ้างอิงอาจช้ากว่าจริง)" if s.get("price_delayed") else ""
+            out.append("\n".join([
+                f"🔔 สัญญาณใหม่ {trade_fmt.BUY_BADGE}: {label} หุ้นสหรัฐ {_when_th(s.get('first_triggered_at'))}",
+                entry + delayed,
+                f"เหตุผล: ทะลุจุดสูงสุดเมื่อวาน {_money(s.get('yesterday_high'))} และจุดสูงสุดก่อนตลาดเปิด "
+                f"{_money(s.get('premarket_high'))} ที่จุดสูงสุดของวัน แนวโน้มระยะยาวขาขึ้น",
+                DISCLAIMER_TH,
+            ]))
+        else:
+            delayed = " (reference price may be delayed)" if s.get("price_delayed") else ""
+            out.append("\n".join([
+                f"NEW {trade_fmt.BUY_BADGE} Trend-join Long: {label} {_hhmm(s.get('first_triggered_at'))} ET",
+                entry + delayed,
+                f"Why: above yesterday's high {_money(s.get('yesterday_high'))} and the pre-market high "
+                f"{_money(s.get('premarket_high'))}, at the high of day, y-close above SMA200",
+            ]))
+    return out
+
+
+def send_stock_signal_alerts(scan_date: date, strat: dict, output_dir: Path | None = None) -> int:
+    """Alert the new Scanner B entries. Groups get them per GROUP_ALERTS; the owner already
+    sees them in report section B, so the owner copy is sent only when B is not reported."""
+    pre = _load(report.output_path(scan_date.isoformat(), output_dir))
+    alerts = stock_signal_alerts(strat, pre)
+    for text in alerts:
+        send_alert(text, "new", owner="B" not in owner_sections())
+    return len(alerts)

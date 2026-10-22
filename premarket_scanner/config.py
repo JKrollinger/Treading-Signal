@@ -70,7 +70,11 @@ TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate h
 REPORT_NEWS: bool = _env_bool("REPORT_NEWS", False)                # news headline under each ticker in sections A/B
 # Which sections the report carries: A = pre-market gappers, B = Trend-join hits, C = special watchlist
 REPORT_SECTIONS: str = _env_str("REPORT_SECTIONS", "A,B,C")             # owner chat
-GROUP_REPORT_SECTIONS: str = _env_str("GROUP_REPORT_SECTIONS", "C")     # groups/channels: signals only
+GROUP_REPORT_SECTIONS: str = _env_str("GROUP_REPORT_SECTIONS", "")      # groups/channels: no periodic report
+# Alerts the groups/channels get (the owner gets all of them):
+#   new = entry signals (Scanner B stocks, Scanner C, TradingView)   exit = T/P reached, stop hit, expiry
+#   trail = trailing stop moved   weakened = back below the breakout   held = signal held by the time filter
+GROUP_ALERTS: str = _env_str("GROUP_ALERTS", "new")
 
 # Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
