@@ -6,3 +6,5 @@ output/
 data/
 logs/
 graphify-out/
+*.exe
+mt5setup.exe

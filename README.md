@@ -174,8 +174,11 @@ and find your broker's symbol names with:
 .venv\Scripts\python mt5_probe.py
 ```
 
-If MT5 is unreachable the scanner falls back to TradingView, then Yahoo, mapping the
-broker symbol to the equivalent (`XAUUSD` -> `OANDA:XAUUSD` -> `GC=F`).
+If MT5 is unreachable, or a symbol does not exist at the broker, the scanner falls back to
+TradingView, then Yahoo, mapping the broker symbol to the equivalent
+(`XAUUSD` -> `OANDA:XAUUSD` -> `GC=F`, `BTCUSD` -> `BITSTAMP:BTCUSD` -> `BTC-USD`).
+The MetaQuotes-Demo server, for example, has spot gold and forex but no crypto CFDs, so
+bitcoin keeps coming from TradingView there.
 
 ## Backtest of the Trend-join Long rules
 

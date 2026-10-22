@@ -103,6 +103,30 @@ def _update_server_offset(latest_tick_epoch: float) -> None:
     _server_offset = round(raw / 900.0) * 900.0
 
 
+def _fresh_tick(mt5, symbol: str, tries: int = 6):
+    """A symbol just added to Market Watch has no tick for a moment; wait for the first one."""
+    tick = None
+    for _ in range(tries):
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None and (tick.bid or tick.last):
+            return tick
+        time.sleep(0.5)
+    return tick
+
+
+def symbol_paths(symbols: list[str]) -> dict[str, str]:
+    """Broker folder of each symbol, e.g. 'Forex\\Majors\\EURUSD' or 'Crypto\\BTCUSD'."""
+    mt5 = _mt5()
+    if not connect():
+        return {}
+    out = {}
+    for s in symbols:
+        info = mt5.symbol_info(s)
+        if info is not None:
+            out[s] = info.path
+    return out
+
+
 def fetch_rows(symbols: list[str]) -> dict[str, dict]:
     """Level data per symbol in the same shape the other sources use."""
     mt5 = _mt5()
@@ -114,14 +138,25 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
         if not mt5.symbol_select(s, True):
             log.warning("MT5: symbol %s not found at this broker", s)
             continue
-        tick = mt5.symbol_info_tick(s)
+        tick = _fresh_tick(mt5, s)
         if tick is not None:
             ticks[s] = tick
-    if ticks:
-        _update_server_offset(max(t.time for t in ticks.values()))
+    live = [t.time for t in ticks.values() if t.bid or t.last]
+    if live:
+        _update_server_offset(max(live))
 
     for s, tick in ticks.items():
         info = mt5.symbol_info(s)
+        if not (tick.bid or tick.last):
+            # market closed for this symbol or no quote yet: use the last 1-minute bar
+            m1 = mt5.copy_rates_from_pos(s, mt5.TIMEFRAME_M1, 0, 1)
+            if m1 is not None and len(m1):
+                log.info("MT5: %s has no live tick; using last M1 close", s)
+                tick = type("T", (), {"bid": float(m1[-1]["close"]), "ask": 0.0, "last": 0.0,
+                                      "time": int(m1[-1]["time"])})()
+            else:
+                log.warning("MT5: %s has no quote", s)
+                continue
         rates = mt5.copy_rates_from_pos(s, mt5.TIMEFRAME_D1, 0, 260)
         if rates is None or len(rates) < 2:
             log.warning("MT5: no daily history for %s", s)

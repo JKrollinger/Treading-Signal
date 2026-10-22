@@ -33,7 +33,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         names = mt5_source.list_symbols(args.list)
-        print(f"{len(names)} symbol(s) matching {args.list}: {', '.join(names[:80])}")
+        paths = mt5_source.symbol_paths(names[:80])
+        print(f"{len(names)} symbol(s) matching {args.list}:")
+        for n in names[:80]:
+            print(f"  {n:14} {paths.get(n, '')}")
         return 0
 
     if args.symbols:
