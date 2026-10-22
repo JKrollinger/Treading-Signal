@@ -60,6 +60,9 @@ class Params:
     session_utc: tuple[int, int] | None = None     # entry hours [start, end) in UTC
     friday_cutoff_utc: int | None = None
     news_blackout: bool = False
+    # which side may trade: "long" (Trend-join Long), "short" (the mirror, Trend-join Short)
+    # or "both" (the 200-day SMA picks the side each day; still one trade at a time)
+    side: str = "long"
 
 
 @dataclass
@@ -77,6 +80,7 @@ class Trade:
     pct_return: float     # percent of entry, after costs
     bars_held: int
     partial_taken: bool = False
+    side: str = "long"
 
 
 @dataclass
@@ -164,7 +168,7 @@ def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
     daily["adx"] = _wilder(dx.fillna(0.0), 14)
     if p.sma_slope_days:
         daily["sma_slope"] = daily["sma"] - daily["sma"].shift(p.sma_slope_days)
-    for col in ("high", "close", "sma", "atr", "adx", "atr_med100", "sma_slope"):
+    for col in ("high", "low", "close", "sma", "atr", "adx", "atr_med100", "sma_slope"):
         if col in daily:
             daily[f"y_{col}"] = daily[col].shift(1)
     return daily
@@ -194,40 +198,51 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
     trades: list[Trade] = []
     skipped: Counter = Counter()
     cur_day = None
-    hod = -math.inf
+    hod, lod = -math.inf, math.inf
     y = None
-    day_ok = False
+    day_side: str | None = None      # "long" / "short" when today may trade, else None
     traded_today = False
     open_until = -1
     days_tested = 0
+    allowed = {"long": ("long",), "short": ("short",), "both": ("long", "short")}[p.side]
 
     for i in range(n):
         d = bar_dates[i]
         if d != cur_day:
-            cur_day, hod, traded_today = d, -math.inf, False
+            cur_day, hod, lod, traded_today = d, -math.inf, math.inf, False
             row = daily.loc[d] if d in daily.index else None
             y = None
-            if row is not None and not any(pd.isna(row[k]) for k in ("y_high", "y_close", "y_sma", "y_atr")):
+            if row is not None and not any(pd.isna(row[k]) for k in ("y_high", "y_low", "y_close", "y_sma", "y_atr")):
                 y = row
                 days_tested += 1
-            day_ok = False
+            day_side = None
             if y is not None:
-                if float(y["y_close"]) <= float(y["y_sma"]):
-                    skipped["below_sma200"] += 1
+                # the 200-day SMA decides the side: above -> only longs, below -> only shorts
+                trend = "long" if float(y["y_close"]) > float(y["y_sma"]) else "short"
+                slope = float(y["y_sma_slope"]) if p.sma_slope_days and not pd.isna(y.get("y_sma_slope", np.nan)) else np.nan
+                if trend not in allowed:
+                    skipped["below_sma200" if trend == "short" else "above_sma200"] += 1
                 elif p.adx_min is not None and (pd.isna(y["y_adx"]) or float(y["y_adx"]) < p.adx_min):
                     skipped["adx_low"] += 1
                 elif p.atr_ratio_max is not None and not pd.isna(y["y_atr_med100"]) and \
                         float(y["y_atr"]) > p.atr_ratio_max * float(y["y_atr_med100"]):
                     skipped["volatility_extreme"] += 1
-                elif p.sma_slope_days and (pd.isna(y.get("y_sma_slope", np.nan)) or float(y["y_sma_slope"]) <= 0):
-                    skipped["sma_falling"] += 1
+                elif p.sma_slope_days and (np.isnan(slope) or (slope <= 0 if trend == "long" else slope >= 0)):
+                    skipped["sma_falling" if trend == "long" else "sma_rising"] += 1
                 else:
-                    day_ok = True
+                    day_side = trend
         hod = max(hod, highs[i])
-        if i <= open_until or traded_today or not day_ok:
+        lod = min(lod, lows[i])
+        if i <= open_until or traded_today or day_side is None:
             continue
         c = closes[i]
-        if not (c > float(y["y_high"]) and c >= hod * (1.0 - p.hod_tol_pct / 100.0)):
+        is_long = day_side == "long"
+        if is_long:
+            # breakout above yesterday's high while at the high of the day
+            if not (c > float(y["y_high"]) and c >= hod * (1.0 - p.hod_tol_pct / 100.0)):
+                continue
+        elif not (c < float(y["y_low"]) and c <= lod * (1.0 + p.hod_tol_pct / 100.0)):
+            # mirror: breakdown below yesterday's low while at the low of the day
             continue
         h = int(utc_hours[i])
         if p.session_utc and not (p.session_utc[0] <= h < p.session_utc[1]):
@@ -242,44 +257,55 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
 
         entry = float(c)
         atr = float(y["y_atr"])
-        stop = entry - p.stop_atr_mult * atr
-        risk = entry - stop
+        sign = 1.0 if is_long else -1.0          # +1 long, -1 short: profit = sign x (exit - entry)
+        stop = entry - sign * p.stop_atr_mult * atr
+        risk = abs(entry - stop)
+        initial_stop = stop
         if stop <= 0 or risk <= 0:
             continue
-        target = entry + p.target_r * risk if p.target_r else None
+        target = entry + sign * p.target_r * risk if p.target_r else None
+        partial_level = entry + sign * p.partial_r * risk if p.partial_r else None
         last_day_pos = date_pos[d] + p.max_hold_days
-        highest = entry
+        extreme = entry                           # highest high (long) / lowest low (short) since entry
         partial_price = None
         exit_price, exit_reason, j_exit = None, "open", n - 1
         for j in range(i + 1, n):
             if date_pos.get(bar_dates[j], 10**9) > last_day_pos:
                 exit_price, exit_reason, j_exit = float(closes[j - 1]), "time", j - 1
                 break
-            if lows[j] <= stop:
-                exit_price, exit_reason, j_exit = stop, "trail" if (p.trail_atr_mult and stop > entry - risk) else "stop", j
+            # adverse extreme of the bar (low for a long, high for a short) checked first
+            adverse, favourable = (lows[j], highs[j]) if is_long else (highs[j], lows[j])
+            if sign * (adverse - stop) <= 0:
+                moved = sign * (stop - initial_stop) > 0
+                exit_price, exit_reason, j_exit = stop, "trail" if (p.trail_atr_mult and moved) else "stop", j
                 break
-            if target is not None and highs[j] >= target:
+            if target is not None and sign * (favourable - target) >= 0:
                 exit_price, exit_reason, j_exit = target, "target", j
                 break
-            if p.partial_r and partial_price is None and highs[j] >= entry + p.partial_r * risk:
-                partial_price = entry + p.partial_r * risk
+            if partial_level is not None and partial_price is None and sign * (favourable - partial_level) >= 0:
+                partial_price = partial_level
             if p.trail_atr_mult:
-                highest = max(highest, highs[j])
-                stop = max(stop, highest - p.trail_atr_mult * atr)
+                if is_long:
+                    extreme = max(extreme, highs[j])
+                    stop = max(stop, extreme - p.trail_atr_mult * atr)
+                else:
+                    extreme = min(extreme, lows[j])
+                    stop = min(stop, extreme + p.trail_atr_mult * atr)
         if exit_price is None:
             exit_price = float(closes[-1])
 
         cost_r = (p.cost_pct / 100.0) * entry / risk
         if partial_price is not None:
-            r = 0.5 * (partial_price - entry) / risk + 0.5 * (exit_price - entry) / risk - cost_r
-            pct = 0.5 * (partial_price / entry - 1.0) * 100.0 + 0.5 * (exit_price / entry - 1.0) * 100.0 - p.cost_pct
+            r = 0.5 * sign * (partial_price - entry) / risk + 0.5 * sign * (exit_price - entry) / risk - cost_r
+            pct = (0.5 * sign * (partial_price / entry - 1.0) * 100.0
+                   + 0.5 * sign * (exit_price / entry - 1.0) * 100.0 - p.cost_pct)
         else:
-            r = (exit_price - entry) / risk - cost_r
-            pct = (exit_price / entry - 1.0) * 100.0 - p.cost_pct
+            r = sign * (exit_price - entry) / risk - cost_r
+            pct = sign * (exit_price / entry - 1.0) * 100.0 - p.cost_pct
         trades.append(Trade(
-            symbol, str(d), bars.index[i].isoformat(), entry, entry - risk, target,
+            symbol, str(d), bars.index[i].isoformat(), entry, initial_stop, target,
             bars.index[j_exit].isoformat(), exit_price, exit_reason, float(r), float(pct), int(j_exit - i),
-            partial_price is not None,
+            partial_price is not None, day_side,
         ))
         traded_today, open_until = True, j_exit
 

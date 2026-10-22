@@ -66,6 +66,43 @@ def state_file() -> Path:
 
 
 # Sizing (read-only) --------------------------------------------------------------------
+def loss_per_lot(symbol: str, entry: float, stop: float) -> tuple[float | None, str]:
+    """Money lost by 1.0 lot if price goes from ``entry`` to ``stop``, in the account currency.
+
+    Uses the broker's own calculation (``order_calc_profit``), which handles every contract
+    type and currency conversion. The tick value is only a fallback: some brokers report it
+    wrongly for CFDs (MetaQuotes-Demo gives gold 0.1 per tick where the real P/L is 1.0, which
+    made gold lots 10x too large).
+    """
+    mt5 = mt5_source._mt5()
+    entry, stop = float(entry), float(stop)
+    if entry == stop:
+        return None, "none"
+    order_type = mt5.ORDER_TYPE_BUY if stop < entry else mt5.ORDER_TYPE_SELL
+    broker = None
+    try:
+        broker = mt5.order_calc_profit(order_type, symbol, 1.0, entry, stop)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("order_calc_profit failed for %s: %s", symbol, exc)
+    info = mt5.symbol_info(symbol)
+    tick_based = None
+    if info is not None:
+        tick_size = float(info.trade_tick_size or info.point or 0.0)
+        tick_value = float(info.trade_tick_value or 0.0)
+        if tick_size > 0 and tick_value > 0:
+            tick_based = abs(entry - stop) / tick_size * tick_value
+    if broker is not None and broker < 0:
+        loss = -float(broker)
+        if tick_based and abs(tick_based / loss - 1.0) > 0.2:
+            log.info("%s: broker loss/lot %.2f differs from tick-value estimate %.2f; using the broker's",
+                     symbol, loss, tick_based)
+        return loss, "broker"
+    if tick_based:
+        log.warning("%s: order_calc_profit unavailable (%s); using tick value %.2f/lot", symbol, broker, tick_based)
+        return tick_based, "tick_value"
+    return None, "none"
+
+
 def compute_lots(symbol: str, entry: float, stop: float, risk_pct: float | None = None) -> dict | None:
     """Lot size so that the distance entry->stop risks ``risk_pct`` of the balance."""
     if not mt5_source.connect():
@@ -77,12 +114,9 @@ def compute_lots(symbol: str, entry: float, stop: float, risk_pct: float | None 
     acc = mt5.account_info()
     if info is None or acc is None:
         return None
-    tick_size = float(info.trade_tick_size or info.point)
-    tick_value = float(info.trade_tick_value or 0.0)
-    risk = float(entry) - float(stop)
-    if risk <= 0 or tick_size <= 0 or tick_value <= 0:
+    risk_per_lot, method = loss_per_lot(symbol, entry, stop)
+    if not risk_per_lot or risk_per_lot <= 0:
         return None
-    risk_per_lot = risk / tick_size * tick_value
     pct = config.EA_RISK_PCT if risk_pct is None else risk_pct
     risk_money = float(acc.balance) * pct / 100.0
     step = float(info.volume_step or 0.01)
@@ -94,12 +128,14 @@ def compute_lots(symbol: str, entry: float, stop: float, risk_pct: float | None 
     if lots > float(info.volume_max):
         lots = float(info.volume_max)
         notes.append(f"เกินสูงสุด ใช้ {lots:g} ล็อต")
+    if method != "broker":
+        notes.append("คำนวณล็อตจากค่า tick ของโบรกเกอร์ (ตรวจขนาดไม้ใน MT5 อีกครั้ง)")
     lots = round(lots, 8)
     return {
         "symbol": symbol, "lots": lots, "risk_money": lots * risk_per_lot, "risk_per_lot": risk_per_lot,
         "balance": float(acc.balance), "currency": str(acc.currency), "digits": int(info.digits),
         "stops_level_points": int(info.trade_stops_level or 0), "point": float(info.point),
-        "volume_min": float(info.volume_min), "volume_step": step, "notes": notes,
+        "volume_min": float(info.volume_min), "volume_step": step, "notes": notes, "method": method,
     }
 
 
