@@ -68,6 +68,9 @@ TELEGRAM_EXTRA_CHAT_IDS: str = _env_str("TELEGRAM_EXTRA_CHAT_IDS", "")  # groups
 REPORT_LANGUAGE: str = _env_str("REPORT_LANGUAGE", "th").lower()   # "th" plain Thai | "en"
 TRANSLATE_NEWS: bool = _env_bool("TRANSLATE_NEWS", True)           # translate headlines to Thai
 REPORT_NEWS: bool = _env_bool("REPORT_NEWS", False)                # news headline under each ticker in sections A/B
+# Which sections the report carries: A = pre-market gappers, B = Trend-join hits, C = special watchlist
+REPORT_SECTIONS: str = _env_str("REPORT_SECTIONS", "A,B,C")             # owner chat
+GROUP_REPORT_SECTIONS: str = _env_str("GROUP_REPORT_SECTIONS", "C")     # groups/channels: signals only
 
 # Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)

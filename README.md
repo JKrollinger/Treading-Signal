@@ -302,13 +302,17 @@ holds every ticker's values and which checks failed, so a miss is explainable.
 
 # Telegram delivery
 
-After every scheduled run the scheduler sends one message with three sections:
-Scanner A (pre-market gappers), Scanner B (Trend-join Long hits) and Scanner C (the
-special watchlist: currency pairs, gold, bitcoin). The default language is **plain Thai**
-written for readers without a trading background (`REPORT_LANGUAGE=th`). Sections A and B
-list signals only, one line per ticker; the news headline under each ticker is off by
-default and comes back with `REPORT_NEWS=true` (translated to Thai when
-`TRANSLATE_NEWS=true`, free public service, falls back to the English headline). Example:
+After every scheduled run the scheduler sends one report. The owner chat gets every
+section (`REPORT_SECTIONS`, default `A,B,C`): Scanner A (pre-market gappers), Scanner B
+(Trend-join Long hits) and Scanner C (the special watchlist: currency pairs, gold,
+bitcoin), plus the MT5 account section when that is enabled. Groups and channels in
+`TELEGRAM_EXTRA_CHAT_IDS` get only the signal section by default
+(`GROUP_REPORT_SECTIONS`, default `C`); set it to `A,B,C` to send them the full report.
+The default language is **plain Thai** written for readers without a trading background
+(`REPORT_LANGUAGE=th`). Sections A and B list signals only, one line per ticker; the news
+headline under each ticker is off by default and comes back with `REPORT_NEWS=true`
+(translated to Thai when `TRANSLATE_NEWS=true`, free public service, falls back to the
+English headline). Example of the owner's copy:
 
 ```
 [Scanner A: หุ้นที่พุ่งขึ้นก่อนตลาดเปิด]
@@ -560,6 +564,8 @@ overwrites that day's file.
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather. |
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives the reports; `telegram_setup.py --save` fills it in. |
 | `REPORT_LANGUAGE` | `th` | `th` plain Thai, `en` compact English. |
+| `REPORT_SECTIONS` | `A,B,C` | Sections in the owner chat's report: `A` pre-market gappers, `B` Trend-join hits, `C` special watchlist. |
+| `GROUP_REPORT_SECTIONS` | `C` | Sections sent to the groups/channels in `TELEGRAM_EXTRA_CHAT_IDS`; signals only by default. |
 | `REPORT_NEWS` | `false` | Show the news headline under each ticker in sections A and B. Off keeps the message to signals only. |
 | `TRANSLATE_NEWS` | `true` | Translate English headlines to Thai when they are shown (cached in `data/translations_th.json`). |
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |

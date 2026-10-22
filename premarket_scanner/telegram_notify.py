@@ -1,12 +1,15 @@
-"""Telegram delivery of both scanners' results.
+"""Telegram delivery of the scanners' results.
 
-Every scheduled run sends one message with two sections, always in this order:
+Every scheduled run sends one report, built from these sections in this order:
 
-    [Scanner A: Pre-market Gappers]
-    ...the latest pre-market list...
+    [Scanner A: Pre-market Gappers]      the latest pre-market list
+    [Scanner B: Trend-join Long Hits]    the stock setups triggered so far today
+    [Scanner C: Special Watchlist]       currency pairs, gold, bitcoin with their signals
+    [MT5 account]                        owner chat only (PORTFOLIO_ENABLED)
 
-    [Scanner B: Trend-join Long Hits]
-    ...the trade setups triggered so far today...
+Which sections an audience gets is configurable: ``REPORT_SECTIONS`` for the owner chat
+(default ``A,B,C``) and ``GROUP_REPORT_SECTIONS`` for the groups/channels in
+``TELEGRAM_EXTRA_CHAT_IDS`` (default ``C``: signals only, keeping group messages short).
 
 Credentials are re-read from ``.env`` before every send, so adding the bot token or chat
 id later does not require restarting the scheduler.
@@ -501,16 +504,39 @@ def section_d(thai: bool) -> list[str]:
     return mt5_portfolio.format_section(snap, thai)
 
 
-def build_report(pre: dict | None, strat: dict | None, include_portfolio: bool = False) -> str:
+def _sections(raw: str) -> set[str]:
+    """'a, b,C' -> {'A', 'B', 'C'}."""
+    return {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+
+def owner_sections() -> set[str]:
+    return _sections(config.REPORT_SECTIONS)
+
+
+def group_sections() -> set[str]:
+    return _sections(config.GROUP_REPORT_SECTIONS)
+
+
+def build_report(pre: dict | None, strat: dict | None, include_portfolio: bool = False,
+                 sections: set[str] | None = None, c_lines: list[str] | None = None) -> str:
+    """Assemble the report from the requested sections (default: the owner's set).
+
+    ``c_lines`` lets a caller that builds two copies (owner and group) fetch the live
+    Scanner C data once and reuse it.
+    """
     thai = is_thai()
+    sections = owner_sections() if sections is None else sections
     parts: list[list[str]] = []
-    if thai:
-        names = {r["ticker"]: r.get("name") for r in (pre or {}).get("results") or []}
-        parts += [section_a_th(pre), section_b_th(strat, names)]
-    else:
-        parts += [section_a(pre), section_b(strat)]
-    if config.SPECIAL_ENABLED:
-        parts.append(section_c(thai))
+    if "A" in sections:
+        parts.append(section_a_th(pre) if thai else section_a(pre))
+    if "B" in sections:
+        if thai:
+            names = {r["ticker"]: r.get("name") for r in (pre or {}).get("results") or []}
+            parts.append(section_b_th(strat, names))
+        else:
+            parts.append(section_b(strat))
+    if "C" in sections and config.SPECIAL_ENABLED:
+        parts.append(section_c(thai) if c_lines is None else c_lines)
     if include_portfolio and config.PORTFOLIO_ENABLED:
         parts.append(section_d(thai))
     if thai:
@@ -523,20 +549,24 @@ def build_report(pre: dict | None, strat: dict | None, include_portfolio: bool =
     return "\n".join(lines)
 
 
-def build_report_for(scan_date: date, output_dir: Path | None = None, include_portfolio: bool = False) -> str:
+def build_report_for(scan_date: date, output_dir: Path | None = None, include_portfolio: bool = False,
+                     sections: set[str] | None = None) -> str:
     pre = _load(report.output_path(scan_date.isoformat(), output_dir))
     strat = _load(strategy.strategy_file(scan_date, output_dir))
-    return build_report(pre, strat, include_portfolio=include_portfolio)
+    return build_report(pre, strat, include_portfolio=include_portfolio, sections=sections)
 
 
 def send_report_for(scan_date: date, output_dir: Path | None = None) -> bool:
-    """Send today's combined report: owner gets the account section, groups do not."""
+    """Send today's report: the owner's sections (plus the account section) to the owner
+    chat, the group sections to every extra group/channel. One send when both are equal."""
     pre = _load(report.output_path(scan_date.isoformat(), output_dir))
     strat = _load(strategy.strategy_file(scan_date, output_dir))
-    show_portfolio = config.PORTFOLIO_ENABLED
-    if config.PORTFOLIO_TO_GROUP or not show_portfolio:
-        return send_message(build_report(pre, strat, include_portfolio=show_portfolio))
-    ok = send_message(build_report(pre, strat, include_portfolio=True), admin_only=True)
-    if extra_chat_ids():
-        ok = send_message(build_report(pre, strat, include_portfolio=False), extras_only=True) and ok
-    return ok
+    owner_set, group_set = owner_sections(), group_sections()
+    c_lines = section_c(is_thai()) if config.SPECIAL_ENABLED and "C" in (owner_set | group_set) else None
+    owner = build_report(pre, strat, include_portfolio=config.PORTFOLIO_ENABLED, sections=owner_set, c_lines=c_lines)
+    group = build_report(pre, strat, include_portfolio=config.PORTFOLIO_ENABLED and config.PORTFOLIO_TO_GROUP,
+                         sections=group_set, c_lines=c_lines)
+    if owner == group or not extra_chat_ids():
+        return send_message(owner, admin_only=not extra_chat_ids())
+    ok = send_message(owner, admin_only=True)
+    return send_message(group, extras_only=True) and ok
