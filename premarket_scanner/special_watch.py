@@ -138,12 +138,96 @@ def next_signal_no(state_path: Path | None = None) -> int:
 
 def record_result(rec: dict, state_path: Path | None = None) -> None:
     """Append a finished signal to data/signal_results.jsonl (feeds the WIN/LOSS tally)."""
-    row = {k: rec.get(k) for k in ("no", "symbol", "date", "entry", "initial_stop", "status", "result_r", "closed_at")}
+    row = {k: rec.get(k) for k in ("no", "symbol", "date", "triggered_at", "entry", "initial_stop", "stop",
+                                   "partial_level", "partial_taken", "status", "exit_price", "result_r", "closed_at")}
     row["side"] = "buy"
     path = _aux_path(state_path, "signal_results.jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# Chart file for MT5 (mt5_ea/SignalBotSignals.mq5 draws it) --------------------------
+CHART_FILE = "signals.csv"
+CHART_FIELDS = ["no", "symbol", "side", "status", "entry_time", "entry", "sl_initial", "sl", "tp1",
+                "tp1_hit", "exit_time", "exit_price", "result_r"]
+CHART_HISTORY_DAYS = 30
+
+
+def _epoch(iso: str | None) -> int:
+    if not iso:
+        return 0
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ET)
+    return int(dt.timestamp())
+
+
+def _num_txt(v) -> str:
+    if v is None or v == "":
+        return "0"
+    return f"{float(v):.6f}".rstrip("0").rstrip(".")
+
+
+def chart_rows(state: dict[str, dict], now: datetime, results_path: Path | None = None,
+               days: int = CHART_HISTORY_DAYS) -> list[dict]:
+    """Signals followed now plus those closed in the last ``days`` days, one row each (UTC epoch times)."""
+    since = (now - timedelta(days=days)).isoformat()
+    recs: dict[tuple, dict] = {}
+    path = results_path or _aux_path(None, "signal_results.jsonl")
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("triggered_at") and (row.get("closed_at") or "") >= since:
+                recs[(row["symbol"], row["triggered_at"])] = row
+    for sym, rec in state.items():
+        if sym.startswith("hold:") or "entry" not in rec or not rec.get("triggered_at"):
+            continue
+        if rec.get("status") in TRACKING or (rec.get("closed_at") or "") >= since:
+            recs[(rec["symbol"], rec["triggered_at"])] = rec
+    rows = []
+    for rec in sorted(recs.values(), key=lambda r: r["triggered_at"]):
+        closed = rec.get("status") not in TRACKING
+        rows.append({
+            "no": rec.get("no") or "",
+            "symbol": rec["symbol"],
+            "side": "BUY",
+            "status": rec.get("status") or "",
+            "entry_time": _epoch(rec["triggered_at"]),
+            "entry": _num_txt(rec.get("entry")),
+            "sl_initial": _num_txt(rec.get("initial_stop")),
+            "sl": _num_txt(rec.get("stop") or rec.get("initial_stop")),
+            "tp1": _num_txt(rec.get("partial_level")),
+            "tp1_hit": 1 if rec.get("partial_taken") else 0,
+            "exit_time": _epoch(rec.get("closed_at")) if closed else 0,
+            "exit_price": _num_txt(rec.get("exit_price")) if closed else "0",
+            "result_r": _num_txt(rec.get("result_r")) if closed else "0",
+        })
+    return rows
+
+
+def export_chart_file(state: dict[str, dict], now: datetime, folder: Path | None = None) -> Path | None:
+    """Write signals.csv into the MT5 Common Files folder (signalbot\\) for the chart indicator."""
+    try:
+        if folder is None:
+            from . import ea_bridge
+            folder = ea_bridge.files_dir()
+        if folder is None:
+            return None
+        folder.mkdir(parents=True, exist_ok=True)
+        rows = chart_rows(state, now)
+        tmp = folder / (CHART_FILE + ".tmp")
+        lines = [",".join(CHART_FIELDS)] + [",".join(str(r[k]) for k in CHART_FIELDS) for r in rows]
+        tmp.write_text("\n".join(lines) + "\n", encoding="ascii", errors="replace")
+        target = folder / CHART_FILE
+        tmp.replace(target)                       # atomic: the indicator never reads half a file
+        return target
+    except OSError as exc:
+        log.warning("chart file not written: %s", exc)
+        return None
 
 
 def outcome(r: float | None) -> str:
@@ -493,12 +577,12 @@ def run_watch(
         rec["stop"] = max(float(rec["stop"]), new_trail)
 
         if price <= rec["stop"]:
-            rec.update(status="stopped", closed_at=stamp, result_r=combined_r(rec, rec["stop"]))
+            rec.update(status="stopped", closed_at=stamp, exit_price=rec["stop"], result_r=combined_r(rec, rec["stop"]))
             record_result(rec, state_path)
             add("exit", fmt_stopped(rec, price, thai, fmt_score(scoreboard(now, state_path=state_path), thai)))
             continue
         if today > date.fromisoformat(rec["expires_on"]):
-            rec.update(status="expired", closed_at=stamp, result_r=combined_r(rec, price))
+            rec.update(status="expired", closed_at=stamp, exit_price=price, result_r=combined_r(rec, price))
             record_result(rec, state_path)
             add("exit", fmt_expired(rec, price, thai, fmt_score(scoreboard(now, state_path=state_path), thai)))
             continue
@@ -513,6 +597,8 @@ def run_watch(
             add("trail", fmt_trail(rec, thai))
 
     save_state(state, state_path)
+    if state_path is None:
+        export_chart_file(state, now)
     if state_path is None:
         try:
             path = day_file(today)
