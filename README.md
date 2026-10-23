@@ -477,6 +477,50 @@ the MT5 account) stay in your private chat. Invite friends with the
 group's/channel's invite link (Telegram: group info > Add members / Invite link). Repeat
 `--add-chat` for more chats, or edit the comma-separated list in `.env`.
 
+## Paper day-trade test (USDJPY)
+
+A forward test of one intraday rule, on paper only: no order reaches MT5 and nothing goes
+to the groups; entry and exit alerts go to your private chat. Turn it on with
+`DAYTRADE_ENABLED=true` (`DAYTRADE_SYMBOLS`, default `USDJPY`; needs the MT5 data source).
+
+Why this rule and this pair: three standard forex day-trade designs were backtested on 10
+major pairs over about four years of MT5 15-minute bars with real-account costs (Asian-range
+breakout at the London open, a daily-trend filter plus a break of yesterday's high/low, and
+the same break without the filter). All three lost money across the pairs; the only clear
+positive was USDJPY with the previous-day high/low breakout (727 trades, +0.046R per trade
+after costs, worst drawdown -14R), small enough to be chance. The paper test checks whether
+it holds on new data before any money goes on it.
+
+Rules (`premarket_scanner/daytrade.py`):
+
+* the trading day is the FX day (starts 17:00 New York); the signal window runs from 07:00
+  London to 12:00 New York
+* the first completed 15-minute bar that closes above yesterday's high buys, below
+  yesterday's low sells; one trade per day
+* entry at that close, stop 0.5 x daily ATR(14), T/P 1R; exit at the stop or the T/P
+  (checked on 5-minute bars, the stop first if one bar touches both), otherwise at
+  16:00 New York, never overnight
+* the result is booked in R after a round-trip cost of 1.2 pips
+
+```
+🧪 เดย์เทรดทดสอบ (กระดาษ ไม่ส่งคำสั่งจริง) | USDJPY
+🔴 SELL ➡️ เข้า 157.339
+🔻 TP 156.866 (+1R)
+🔺 SL 157.812 (-1R)
+สัญญาณ 13:15 น. ไทย | ปิดไม่เกิน 03:00 น. ไทย (ไม่ถือข้ามคืน)
+เหตุผล: แท่ง 15 นาทีปิดใต้จุดต่ำสุดเมื่อวาน 157.838
+
+🧪 ✅ เดย์เทรดทดสอบ USDJPY 🔴 SELL WIN +0.97R
+⬅️ ออก 156.866 (ถึง TP) | เข้า 157.339 | หักต้นทุนแล้ว
+📊 ทดสอบมาแล้ว 1 ไม้: 1 WIN 0 LOSS | รวม +0.97R
+```
+
+The scheduler checks every 5 minutes at one minute past (xx:01, xx:06, ...) on weekdays.
+If the bot was off when a signal or an exit happened it catches up on the next check and
+says how late it noticed. Open trade: `data/daytrade_state.json`; every closed paper trade:
+`data/daytrade_paper.jsonl`. Replaying the module over the last 30 FX days gave the same
+side, exit and result as the backtest on every day.
+
 # Scheduling
 
 The schedule is defined in **US Eastern time** so it stays correct across US
@@ -488,6 +532,7 @@ weekdays:
 | Scanner A, pre-market | 08:30, 09:00, ... 14:00 (every 30 min) | `SCAN_TIME_ET`, `SCAN_END_ET`, `SCAN_INTERVAL_MIN` |
 | Scanner B, Trend-join Long | 08:35, 09:05, ... 14:35 (5 min after each Scanner A run, until 15:00) | `STRATEGY_OFFSET_MIN`, `STRATEGY_END_ET` |
 | Telegram report | after every run above | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| Paper day-trade test | every 5 min at xx:01, weekdays (alerts only on an entry or exit) | `DAYTRADE_ENABLED`, `DAYTRADE_SYMBOLS` |
 
 Scanner B signals only count as valid in the regular session at or after
 `STRATEGY_START_ET` (10:00); earlier runs report "No valid setups yet".
@@ -615,6 +660,8 @@ overwrites that day's file.
 | `NEWS_BLACKOUT_MIN` | `30` | Minutes before/after a high-impact US release with no new filtered signals. |
 | `NEWS_CALENDAR_ENABLED` | `true` | Read this week's high-impact events from ForexFactory. |
 | `STALE_QUOTE_MIN` | `30` | Skip symbols whose quote is older than this (market closed). |
+| `DAYTRADE_ENABLED` | `false` | Paper day-trade test: previous-day high/low breakout on 15-minute bars, owner chat only, no orders. |
+| `DAYTRADE_SYMBOLS` | `USDJPY` | Pairs for the paper day-trade test (MT5 symbol names). |
 
 ## How a scan works
 

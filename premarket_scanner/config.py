@@ -150,6 +150,13 @@ FRIDAY_CUTOFF_UTC: int = _env_int("FRIDAY_CUTOFF_UTC", 15)   # no new signals on
 NEWS_BLACKOUT_MIN: int = _env_int("NEWS_BLACKOUT_MIN", 30)   # minutes before/after a high-impact release
 NEWS_CALENDAR_ENABLED: bool = _env_bool("NEWS_CALENDAR_ENABLED", True)   # ForexFactory weekly calendar
 
+# Paper day-trade test (owner chat only; nothing is sent to MT5 or the groups) --------
+# Previous-day high/low breakout on 15-minute bars, flat by 16:00 New York; needs MT5.
+DAYTRADE_ENABLED: bool = _env_bool("DAYTRADE_ENABLED", False)
+DAYTRADE_SYMBOLS: list[str] = [
+    s.strip().upper() for s in _env_str("DAYTRADE_SYMBOLS", "USDJPY").split(",") if s.strip()
+]
+
 # News --------------------------------------------------------------------------
 BENZINGA_API_KEY: str = _env_str("BENZINGA_API_KEY", "")
 NEWS_LOOKBACK_HOURS: int = _env_int("NEWS_LOOKBACK_HOURS", 48)

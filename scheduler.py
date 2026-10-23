@@ -74,6 +74,12 @@ def watch_slots() -> list[dtime]:
     return slots(dtime(0, 0), dtime(23, 59), config.SPECIAL_WATCH_INTERVAL_MIN)
 
 
+def daytrade_slots() -> list[dtime]:
+    """Every 5 minutes, one minute past (xx:01, xx:06, ...): never the same time as the
+    Scanner C watch, and the 15-minute bar has just closed."""
+    return slots(dtime(0, 1), dtime(23, 59), 5)
+
+
 def next_occurrence(after: datetime, times: list[dtime], weekdays_only: bool = True) -> datetime:
     """Earliest datetime strictly after ``after`` whose wall-clock time is in ``times``."""
     day = after.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -134,6 +140,14 @@ def run_watch() -> None:
             log.exception("MT5 portfolio check failed")
 
 
+def run_daytrade() -> None:
+    from premarket_scanner import daytrade
+
+    messages = daytrade.check(send=True)
+    if messages:
+        log.info("Day-trade paper test: %d message(s)", len(messages))
+
+
 def notify(job_name: str, error: Exception | None = None) -> None:
     """Send the combined report for today (plus a failure note when a job crashed)."""
     if not tg.is_configured():
@@ -187,6 +201,9 @@ def build_jobs() -> list[Job]:
         ]
     if config.SPECIAL_WATCH_ENABLED and config.SPECIAL_WATCHLIST:
         jobs.append(Job("Scanner C (watch)", watch_slots(), run_watch, weekdays_only=False, send_report=False))
+    if config.DAYTRADE_ENABLED and config.DAYTRADE_SYMBOLS:
+        jobs.append(Job(f"Day-trade paper test ({','.join(config.DAYTRADE_SYMBOLS)})", daytrade_slots(),
+                        run_daytrade, weekdays_only=True, send_report=False))
     return jobs
 
 
@@ -195,7 +212,9 @@ def describe_schedule(jobs: list[Job]) -> str:
     for j in jobs:
         ts = [t.strftime("%H:%M") for t in j.times]
         if len(ts) > 24:
-            parts.append(f"{j.name}: every {config.SPECIAL_WATCH_INTERVAL_MIN} min, all day, every day "
+            step = int((datetime.combine(datetime.min, j.times[1]) - datetime.combine(datetime.min, j.times[0]))
+                       .total_seconds() // 60)
+            parts.append(f"{j.name}: every {step} min, all day, {'weekdays' if j.weekdays_only else 'every day'} "
                          f"({len(ts)} checks)")
         else:
             parts.append(f"{j.name}: {ts[0]}-{ts[-1]} ET, {len(ts)} run(s) ({', '.join(ts)})")
