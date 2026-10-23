@@ -510,12 +510,16 @@ def _sections(raw: str) -> set[str]:
     return {s.strip().upper() for s in raw.split(",") if s.strip()}
 
 
+def _without_stocks(sections: set[str]) -> set[str]:
+    return sections if config.STOCKS_ENABLED else sections - {"A", "B"}
+
+
 def owner_sections() -> set[str]:
-    return _sections(config.REPORT_SECTIONS)
+    return _without_stocks(_sections(config.REPORT_SECTIONS))
 
 
 def group_sections() -> set[str]:
-    return _sections(config.GROUP_REPORT_SECTIONS)
+    return _without_stocks(_sections(config.GROUP_REPORT_SECTIONS))
 
 
 def build_report(pre: dict | None, strat: dict | None, include_portfolio: bool = False,

@@ -81,6 +81,9 @@ ALERT_STYLE: str = _env_str("ALERT_STYLE", "compact").lower()
 
 # Scanner C: special watchlist (currency pairs, gold, bitcoin) ---------------------
 SPECIAL_ENABLED: bool = _env_bool("SPECIAL_ENABLED", True)
+# Scanner A (pre-market gappers) and B (Trend-join on those stocks): false = no US-stock jobs,
+# no stock alerts, and sections A/B left out of every report
+STOCKS_ENABLED: bool = _env_bool("STOCKS_ENABLED", True)
 # tradingview = real-time quotes from TradingView (symbols like OANDA:XAUUSD, FX:EURUSD, BITSTAMP:BTCUSD)
 # yahoo       = Yahoo Finance (symbols like EURUSD=X, GC=F, BTC-USD)
 # mt5         = your broker's prices through the MetaTrader 5 terminal running on this PC

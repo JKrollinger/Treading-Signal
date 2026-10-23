@@ -179,10 +179,12 @@ def setup_logging(log_file: Path | None) -> None:
 
 
 def build_jobs() -> list[Job]:
-    jobs = [
-        Job("Scanner A (pre-market)", scan_slots(), run_premarket),
-        Job("Scanner B (Trend-join Long)", strategy_slots(), run_strategy),
-    ]
+    jobs = []
+    if config.STOCKS_ENABLED:
+        jobs += [
+            Job("Scanner A (pre-market)", scan_slots(), run_premarket),
+            Job("Scanner B (Trend-join Long)", strategy_slots(), run_strategy),
+        ]
     if config.SPECIAL_WATCH_ENABLED and config.SPECIAL_WATCHLIST:
         jobs.append(Job("Scanner C (watch)", watch_slots(), run_watch, weekdays_only=False, send_report=False))
     return jobs
@@ -239,6 +241,10 @@ def main(argv: list[str] | None = None) -> int:
             run_job(job)
 
     try:
+        if not jobs:
+            log.warning("no scanner jobs enabled (STOCKS_ENABLED / SPECIAL_WATCH_ENABLED); only Telegram commands run")
+        while not jobs:
+            time.sleep(3600)
         while True:
             now = datetime.now(ET)
             job, due = min(((j, next_occurrence(now, j.times, j.weekdays_only)) for j in jobs), key=lambda x: x[1])
