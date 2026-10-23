@@ -228,8 +228,9 @@ def fmt_request_th(row: dict, sizing: dict | None, name: str | None = None) -> s
     tp_val = float(row["tp"] or 0)
     tp_txt = f"{tp_val:g}" if tp_val else "ไม่ตั้ง"
     side = row["side"]
+    what = "รายการทดสอบที่ส่งให้ EA" if row.get("comment") == "test" else "ส่งรายการสั่งซื้อให้ EA แล้ว"
     lines = [
-        f"📝 ส่งรายการสั่งซื้อให้ EA แล้ว: {label} {trade_fmt.badge(side)} {row['lots']} ล็อต",
+        f"📝 {what}: {label} {trade_fmt.badge(side)} {row['lots']} ล็อต",
         f"{trade_fmt.ENTRY} ราคาอ้างอิง {float(row['entry_ref']):g} | {trade_fmt.stop_arrow(side)} S/L {float(row['sl']):g} | "
         f"{trade_fmt.tp_arrow(side)} T/P {tp_txt}",
     ]
@@ -267,7 +268,7 @@ def fmt_result_th(r: dict, req: dict | None = None, compact: bool = False) -> st
     """
     status = r.get("status", "")
     icon = {"FILLED": "✅", "DRYRUN": "🧪", "REJECTED": "⛔", "FAILED": "⛔", "EXPIRED": "⏱"}.get(status, "ℹ️")
-    label = {"FILLED": "EA เปิดไม้แล้ว", "DRYRUN": "EA ตรวจรายการผ่าน (โหมดทดสอบ ยังไม่ส่งคำสั่ง)",
+    label = {"FILLED": "EA เปิดไม้แล้ว", "DRYRUN": "EA ตรวจรายการผ่าน (โหมด DryRun ยังไม่ส่งคำสั่ง)",
              "REJECTED": "EA ปฏิเสธรายการ", "FAILED": "EA ส่งคำสั่งไม่สำเร็จ", "EXPIRED": "รายการหมดอายุก่อน EA รับ"}.get(status, status)
     if req is None:
         try:
@@ -279,6 +280,8 @@ def fmt_result_th(r: dict, req: dict | None = None, compact: bool = False) -> st
     symbol = (req or {}).get("symbol") or (m.group(1) if (m := _SYMBOL_RE.search(message)) else "")
 
     head = f"{icon} {label}"
+    if (req or {}).get("comment") == "test":
+        head = f"🧪 ผลทดสอบระบบ EA (ไม่ใช่สัญญาณเทรด) | {label}"
     what = []
     if symbol:
         from . import special  # local import: special pulls in the data sources

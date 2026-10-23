@@ -1,7 +1,9 @@
 """Telegram buttons and commands (owner only), via long polling.
 
 * "✅ ยืนยันเข้าเทรด" on a signal -> order request written for the EA (see ea_bridge)
-* "🧪 ทดสอบ EA"            -> a minimum-lot request (a real demo position once the EA's InpDryRun is false)
+* "🧪 ทดสอบ EA"            -> a fixed minimum-lot BUY that tests the bot -> EA pipeline (not a signal;
+                              a real demo position once the EA's InpDryRun is false); the reply lists
+                              the signals actually open, with their side, so the two are not confused
 * /status                   -> account section      /orders -> requests, results, EA heartbeat
 * EA results (results.csv) are reported as they appear.
 
@@ -115,8 +117,43 @@ def test_request(symbol: str) -> str:
     sl, tp = entry - atr, entry + atr
     sizing = ea_bridge.compute_lots(symbol, entry, sl) or {}
     row = ea_bridge.write_order_request(symbol, "BUY", sizing.get("volume_min") or 0.01, sl, tp, entry, comment="test")
-    text = ea_bridge.fmt_request_th(row, None, name)
-    return "🧪 รายการทดสอบล็อตต่ำสุด (ถ้า EA ปิดโหมด DryRun อยู่ จะเปิดไม้จริงบนพอร์ต)\n" + text
+    lines = [
+        "🧪 ทดสอบระบบส่งคำสั่งให้ EA (ไม่ใช่สัญญาณเทรด)",
+        "ฝั่ง BUY ล็อตต่ำสุด และ S/L, T/P ห่าง 1 ATR เป็นค่าตายตัวของการทดสอบ ไม่ได้มาจากสัญญาณใด",
+        "ถ้า EA ปิดโหมด DryRun อยู่ รายการนี้จะเปิดไม้จริงบนพอร์ต",
+        "",
+    ]
+    signals = open_signals_th()
+    lines += (["สัญญาณที่เปิดอยู่ตอนนี้:"] + signals) if signals else ["สัญญาณที่เปิดอยู่ตอนนี้: ไม่มี"]
+    lines += ["", ea_bridge.fmt_request_th(row, None, name)]
+    return "\n".join(lines)
+
+
+def open_signals_th() -> list[str]:
+    """Every signal the bot is following right now, with its side (one line each)."""
+    from . import daytrade, special, special_watch
+
+    out = []
+    try:
+        state = special_watch.load_state()
+    except Exception:  # noqa: BLE001
+        state = {}
+    for sym, rec in state.items():
+        if isinstance(rec, dict) and rec.get("status") in special_watch.TRACKING:
+            side = rec.get("side", "buy")                      # Scanner C is long only
+            name = special.display_name(sym, True)
+            out.append(f"• Scanner C: {name} ({sym}) {trade_fmt.badge(side)} {trade_fmt.ENTRY} "
+                       f"เข้า {special_watch._px(rec['entry'])}")
+    try:
+        paper = daytrade._load(None)
+    except Exception:  # noqa: BLE001
+        paper = {}
+    for sym, rec in paper.items():
+        if isinstance(rec, dict) and rec.get("status") == "open":
+            side = "buy" if rec["side"] > 0 else "sell"
+            out.append(f"• เดย์เทรดทดสอบ (กระดาษ): {sym} {trade_fmt.badge(side)} {trade_fmt.ENTRY} "
+                       f"เข้า {daytrade._px(rec['entry'])}")
+    return out
 
 
 def status_text() -> str:
@@ -144,7 +181,7 @@ HELP_TH = "\n".join([
     "📊 พอร์ต MT5 (/status)  ยอดเงิน ไม้ที่เปิด กำไรขาดทุน",
     "🔔 รายงานล่าสุด (/report)  รายงานสแกน A/B/C และพอร์ต ณ ตอนนี้",
     "📋 รายการ EA (/orders)  รายการที่ส่งให้ EA และผลล่าสุด",
-    "🧪 ทดสอบ EA (/test)  ส่งรายการ 0.01 ล็อตให้ EA (ถ้า EA ปิดโหมด DryRun จะเปิดไม้จริง)",
+    "🧪 ทดสอบ EA (/test)  ทดสอบระบบส่งคำสั่ง ไม่ใช่สัญญาณ: ส่ง BUY 0.01 ล็อตให้ EA (ถ้า EA ปิดโหมด DryRun จะเปิดไม้จริง)",
     "/menu  เรียกเมนูกลับมา",
     "ปุ่มบนข้อความสัญญาณ: ยืนยันเข้าเทรด = เขียนรายการสั่งซื้อให้ EA | ข้าม = ไม่ทำอะไร",
 ])
