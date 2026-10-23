@@ -33,6 +33,7 @@ from . import config, report, strategy, trade_fmt, translate
 log = logging.getLogger(__name__)
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
+_TOKEN_IN_URL_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
 MAX_MESSAGE_CHARS = 4000          # Telegram's hard limit is 4096
 HEADER_A = "[Scanner A: Pre-market Gappers]"
 HEADER_B = "[Scanner B: Trend-join Long Hits]"
@@ -72,9 +73,21 @@ def is_configured() -> bool:
     return bool(token and chat_id)
 
 
+def redact(text: object) -> str:
+    """``text`` with the bot token hidden. requests errors quote the full API URL, token
+    included, so anything Telegram-related goes through this before it is logged."""
+    out = _TOKEN_IN_URL_RE.sub("bot<redacted>", str(text))
+    token = credentials()[0]
+    return out.replace(token, "<redacted>") if token else out
+
+
 # Bot API -----------------------------------------------------------------------
 def api_call(method: str, token: str, **params) -> dict:
-    resp = requests.post(API_URL.format(token=token, method=method), json=params, timeout=config.HTTP_TIMEOUT)
+    try:
+        resp = requests.post(API_URL.format(token=token, method=method), json=params, timeout=config.HTTP_TIMEOUT)
+    except requests.RequestException as exc:
+        # re-raised without the original attached: its text and traceback carry the token
+        raise RuntimeError(f"Telegram {method} request failed: {redact(exc)}") from None
     try:
         payload = resp.json()
     except ValueError:
@@ -133,7 +146,7 @@ def send_message(text: str, admin_only: bool = False, extras_only: bool = False,
                 api_call("sendMessage", token, **params)
         except Exception as exc:  # noqa: BLE001
             ok = False
-            log.error("Telegram send to %s failed: %s", target, exc)
+            log.error("Telegram send to %s failed: %s", target, redact(exc))
     log.info("Telegram message sent (%d chars) to %d chat(s)%s", len(text), len(targets), "" if ok else " with errors")
     return ok
 

@@ -262,7 +262,7 @@ def _answer(token: str, cq_id: str, text: str) -> None:
     try:
         tg.api_call("answerCallbackQuery", token, callback_query_id=cq_id, text=text)
     except Exception as exc:  # noqa: BLE001
-        log.debug("answerCallbackQuery failed: %s", exc)
+        log.debug("answerCallbackQuery failed: %s", tg.redact(exc))
 
 
 def _remove_buttons(token: str, msg: dict) -> None:
@@ -271,7 +271,7 @@ def _remove_buttons(token: str, msg: dict) -> None:
             tg.api_call("editMessageReplyMarkup", token, chat_id=msg["chat"]["id"],
                         message_id=msg["message_id"], reply_markup={"inline_keyboard": []})
     except Exception as exc:  # noqa: BLE001
-        log.debug("editMessageReplyMarkup failed: %s", exc)
+        log.debug("editMessageReplyMarkup failed: %s", tg.redact(exc))
 
 
 def report_ea_results(send: bool = True) -> list[str]:
@@ -319,7 +319,7 @@ def _loop() -> None:
                 except Exception:  # noqa: BLE001
                     log.exception("telegram update handling failed")
         except Exception as exc:  # noqa: BLE001
-            log.warning("telegram polling error: %s", exc)
+            log.warning("telegram polling error: %s", tg.redact(exc))
             time.sleep(10)
         interval = FAST_POLL_TIMEOUT if time.time() < fast_until else RESULTS_POLL_SECONDS
         if time.time() - last_results >= interval:
