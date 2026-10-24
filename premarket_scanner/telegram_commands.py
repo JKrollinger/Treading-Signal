@@ -1,7 +1,7 @@
 """Telegram buttons and commands (owner only), via long polling.
 
 * "✅ ยืนยันเข้าเทรด" on a signal -> order request written for the EA (see ea_bridge)
-* "🧪 ทดสอบ EA"            -> a fixed minimum-lot BUY that tests the bot -> EA pipeline (not a signal;
+* "🧪 ทดสอบ EA"            -> a fixed minimum-lot BUY XAUUSD that tests the bot -> EA pipeline (not a signal;
                               a real demo position once the EA's InpDryRun is false); the reply lists
                               the signals actually open, with their side, so the two are not confused
 * /status                   -> account section      /orders -> requests, results, EA heartbeat
@@ -53,8 +53,13 @@ def signal_keyboard(symbol: str, day: str) -> dict:
     ]]}
 
 
-def test_keyboard(symbol: str) -> dict:
-    return {"inline_keyboard": [[{"text": "🧪 ทดสอบส่งรายการให้ EA (0.01 ล็อต)", "callback_data": f"test:{symbol}"}]]}
+# The EA test always uses this symbol, whatever the watchlist or the open signals are
+TEST_SYMBOL = "XAUUSD"
+
+
+def test_keyboard(symbol: str = TEST_SYMBOL) -> dict:
+    return {"inline_keyboard": [[{"text": f"🧪 ทดสอบระบบ EA (BUY {TEST_SYMBOL} 0.01 ล็อต)",
+                                  "callback_data": f"test:{TEST_SYMBOL}"}]]}
 
 
 # Persistent menu under the message box (owner's private chat only)
@@ -100,9 +105,13 @@ def confirm_trade(symbol: str) -> str:
     return ea_bridge.fmt_request_th(row, sizing, name)
 
 
-def test_request(symbol: str) -> str:
+def test_request(symbol: str | None = None) -> str:
+    """System test of the bot -> EA path: always BUY TEST_SYMBOL at the minimum lot."""
     from . import special
 
+    if symbol and symbol.upper() != TEST_SYMBOL:
+        log.info("test request for %s ignored: the EA test always uses %s", symbol, TEST_SYMBOL)
+    symbol = TEST_SYMBOL
     name = special.display_name(symbol, True)
     rows = {}
     try:
@@ -118,8 +127,9 @@ def test_request(symbol: str) -> str:
     sizing = ea_bridge.compute_lots(symbol, entry, sl) or {}
     row = ea_bridge.write_order_request(symbol, "BUY", sizing.get("volume_min") or 0.01, sl, tp, entry, comment="test")
     lines = [
-        "🧪 ทดสอบระบบส่งคำสั่งให้ EA (ไม่ใช่สัญญาณเทรด)",
-        "ฝั่ง BUY ล็อตต่ำสุด และ S/L, T/P ห่าง 1 ATR เป็นค่าตายตัวของการทดสอบ ไม่ได้มาจากสัญญาณใด",
+        f"🧪 ทดสอบระบบส่งคำสั่งให้ EA เท่านั้น: BUY {TEST_SYMBOL} เสมอ (ไม่ใช่สัญญาณเทรด)",
+        f"ทุกครั้งที่กดจะส่ง BUY {name} ({TEST_SYMBOL}) ล็อตต่ำสุด S/L และ T/P ห่าง 1 ATR "
+        "ไม่เกี่ยวกับสัญญาณใด ทั้ง Scanner C และเดย์เทรดทดสอบ",
         "ถ้า EA ปิดโหมด DryRun อยู่ รายการนี้จะเปิดไม้จริงบนพอร์ต",
         "",
     ]
@@ -181,7 +191,8 @@ HELP_TH = "\n".join([
     "📊 พอร์ต MT5 (/status)  ยอดเงิน ไม้ที่เปิด กำไรขาดทุน",
     "🔔 รายงานล่าสุด (/report)  รายงานสแกน A/B/C และพอร์ต ณ ตอนนี้",
     "📋 รายการ EA (/orders)  รายการที่ส่งให้ EA และผลล่าสุด",
-    "🧪 ทดสอบ EA (/test)  ทดสอบระบบส่งคำสั่ง ไม่ใช่สัญญาณ: ส่ง BUY 0.01 ล็อตให้ EA (ถ้า EA ปิดโหมด DryRun จะเปิดไม้จริง)",
+    f"🧪 ทดสอบ EA (/test)  ทดสอบระบบส่งคำสั่งเท่านั้น: ส่ง BUY {TEST_SYMBOL} 0.01 ล็อตเสมอ ไม่เกี่ยวกับสัญญาณใด "
+    "(ถ้า EA ปิดโหมด DryRun จะเปิดไม้จริง)",
     "/menu  เรียกเมนูกลับมา",
     "ปุ่มบนข้อความสัญญาณ: ยืนยันเข้าเทรด = เขียนรายการสั่งซื้อให้ EA | ข้าม = ไม่ทำอะไร",
 ])
@@ -215,7 +226,7 @@ def handle_update(upd: dict, send: bool = True) -> list[str]:
             text = f"ข้ามสัญญาณ {symbol} ตามคำสั่ง (บอทยังติดตามสัญญาณให้ตามปกติ)"
             _answer(token, cq["id"], "ข้ามแล้ว") if send else None
         elif action == "test":
-            text = test_request(symbol)
+            text = test_request()
             _answer(token, cq["id"], "ส่งรายการทดสอบแล้ว") if send else None
         else:
             return out
@@ -239,10 +250,7 @@ def handle_update(upd: dict, send: bool = True) -> list[str]:
         elif action == "orders":
             reply = orders_text()
         elif action == "test":
-            parts = text.split()
-            symbol = parts[1].upper() if text.startswith("/") and len(parts) > 1 else \
-                (config.SPECIAL_WATCHLIST[0] if config.SPECIAL_WATCHLIST else "XAUUSD")
-            reply = test_request(symbol)
+            reply = test_request()                         # always BUY TEST_SYMBOL, never a signal
         elif action == "report":
             from datetime import datetime as _dt
             from zoneinfo import ZoneInfo as _Z
