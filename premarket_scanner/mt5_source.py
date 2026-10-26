@@ -37,12 +37,25 @@ def _mt5():
 
 
 def connect() -> bool:
-    """Attach to the running terminal (or start it when MT5_PATH is set)."""
+    """Attach to the running terminal (or start it when MT5_PATH is set).
+
+    The MetaTrader5 package never reconnects by itself: once the terminal we attached
+    to is closed, self-updates or crashes, every call just returns None/False (and
+    ``symbol_select`` failures would look like "symbol not found"). So each call first
+    checks that the attachment is still alive and re-initializes when it is not.
+    """
     global _connected
     mt5 = _mt5()
     with _lock:
         if _connected:
-            return True
+            if mt5.terminal_info() is not None:
+                return True
+            log.warning("MT5: lost the connection to the terminal (%s); reconnecting", mt5.last_error())
+            try:
+                mt5.shutdown()
+            except Exception:  # noqa: BLE001 - nothing to salvage, we re-initialize below
+                pass
+            _connected = False
         kwargs: dict = {"timeout": config.MT5_TIMEOUT_MS}
         if config.MT5_PATH:
             kwargs["path"] = config.MT5_PATH
@@ -136,7 +149,11 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
     ticks: dict[str, object] = {}
     for s in symbols:
         if not mt5.symbol_select(s, True):
-            log.warning("MT5: symbol %s not found at this broker", s)
+            err = mt5.last_error()
+            if err and err[0] <= -10000:          # IPC failure: the terminal went away mid-cycle
+                log.warning("MT5: call failed for %s: %s (terminal closed?)", s, err)
+            else:
+                log.warning("MT5: symbol %s not found at this broker", s)
             continue
         tick = _fresh_tick(mt5, s)
         if tick is not None:
