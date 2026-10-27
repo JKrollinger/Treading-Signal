@@ -630,6 +630,7 @@ overwrites that day's file.
 | `SPECIAL_ENABLED` | `true` | Include Scanner C in every message. |
 | `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`), `mt5` (your broker via MetaTrader 5, symbols like `XAUUSD`) or `yahoo` (symbols like `GC=F`). |
 | `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
+| `MT5_AUTOSTART` | `true` | `false` = the bot never starts MT5 itself. While MT5 is closed, Scanner C uses TradingView prices, and the position alerts, confirm button and day-trade test wait. The bot attaches again within one cycle after you open MT5. |
 | `PORTFOLIO_ENABLED` | `true` | Account section in the owner's report and open/close position alerts. |
 | `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
 | `EA_BRIDGE_ENABLED` | `true` | Confirm button on MT5-quoted signals; order requests written for the EA. |

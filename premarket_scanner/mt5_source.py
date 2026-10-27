@@ -13,9 +13,11 @@ Phase 1 is read-only: nothing here places orders.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -28,6 +30,9 @@ ET = ZoneInfo(config.MARKET_TZ)
 _lock = threading.Lock()
 _connected = False
 _server_offset: float | None = None   # broker server clock minus UTC, seconds
+_lost_at: float | None = None         # monotonic time the terminal went away
+_closed_logged = False                # "not starting MT5" already logged for this closed spell
+REATTACH_GRACE_S = 60                 # MT5_AUTOSTART=false: leave a closing terminal alone this long
 
 
 def _mt5():
@@ -36,15 +41,28 @@ def _mt5():
     return mt5
 
 
+def _terminal_running() -> bool:
+    """Whether a terminal64.exe process is running (asked without starting one)."""
+    exe = Path(config.MT5_PATH).name if config.MT5_PATH else "terminal64.exe"
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {exe}", "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True, errors="replace", timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("tasklist failed: %s", exc)
+        return False
+    return f'"{exe.lower()}"' in out.lower()
+
+
 def connect() -> bool:
-    """Attach to the running terminal (or start it when MT5_PATH is set).
+    """Attach to the running terminal (or start it, unless MT5_AUTOSTART=false).
 
     The MetaTrader5 package never reconnects by itself: once the terminal we attached
     to is closed, self-updates or crashes, every call just returns None/False (and
     ``symbol_select`` failures would look like "symbol not found"). So each call first
     checks that the attachment is still alive and re-initializes when it is not.
     """
-    global _connected
+    global _connected, _lost_at, _closed_logged
     mt5 = _mt5()
     with _lock:
         if _connected:
@@ -56,6 +74,18 @@ def connect() -> bool:
             except Exception:  # noqa: BLE001 - nothing to salvage, we re-initialize below
                 pass
             _connected = False
+            _lost_at = time.monotonic()
+        if not config.MT5_AUTOSTART:
+            # initialize() launches the terminal when none is running, path or not, so only
+            # call it for a terminal the user opened; one that just went away may still be
+            # shutting down, and attaching to it would start it again
+            closing = _lost_at is not None and time.monotonic() - _lost_at < REATTACH_GRACE_S
+            if closing or not _terminal_running():
+                if not _closed_logged:
+                    log.info("MT5 is closed and MT5_AUTOSTART=false: not starting it; "
+                             "other data sources are used until MT5 is opened")
+                    _closed_logged = True
+                return False
         kwargs: dict = {"timeout": config.MT5_TIMEOUT_MS}
         if config.MT5_PATH:
             kwargs["path"] = config.MT5_PATH
@@ -71,6 +101,7 @@ def connect() -> bool:
                  getattr(info, "name", "?"), getattr(acc, "login", "?"), getattr(acc, "server", "?"),
                  "demo" if getattr(acc, "trade_mode", None) == 0 else "live/contest")
         _connected = True
+        _closed_logged = False
         return True
 
 

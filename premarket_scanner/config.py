@@ -101,6 +101,7 @@ MT5_LOGIN: int = _env_int("MT5_LOGIN", 0)
 MT5_PASSWORD: str = _env_str("MT5_PASSWORD", "")
 MT5_SERVER: str = _env_str("MT5_SERVER", "")
 MT5_TIMEOUT_MS: int = _env_int("MT5_TIMEOUT_MS", 10_000)
+MT5_AUTOSTART: bool = _env_bool("MT5_AUTOSTART", True)   # false = never start the terminal, only use one you opened
 # Read-only portfolio report (your MT5 account: open positions, floating P/L, closes)
 PORTFOLIO_ENABLED: bool = _env_bool("PORTFOLIO_ENABLED", True)
 PORTFOLIO_TO_GROUP: bool = _env_bool("PORTFOLIO_TO_GROUP", False)   # false = owner chat only
