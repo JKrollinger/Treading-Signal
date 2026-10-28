@@ -287,8 +287,11 @@ def report_ea_results(send: bool = True) -> list[str]:
     reqs = ea_bridge.request_map() if fresh else {}
     texts = [ea_bridge.fmt_result_th(r, reqs.get(r["id"])) for r in fresh]
     if send:
-        for t in texts:
+        for r, t in zip(fresh, texts):
             tg.send_message(t, admin_only=True)
+            # groups see outcomes of confirmed signals only; a 🧪 system test is not a trade
+            if config.EA_RESULTS_TO_GROUP and (reqs.get(r["id"]) or {}).get("comment") != "test":
+                tg.send_message(t, extras_only=True)
     return texts
 
 

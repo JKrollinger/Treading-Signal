@@ -282,7 +282,8 @@ def _check_symbol(symbol: str, now: datetime, state: dict, results_path: Path | 
 
 def check(now: datetime | None = None, send: bool = True, symbols: list[str] | None = None,
           state_path: Path | None = None, results_path: Path | None = None) -> list[str]:
-    """One pass over the paper day-trade symbols. Returns the messages (sent to the owner only)."""
+    """One pass over the paper day-trade symbols. Returns the messages (sent to the owner, and
+    to the groups too with DAYTRADE_TO_GROUP)."""
     from . import telegram_notify as tg
 
     now = (now or datetime.now(UTC)).astimezone(UTC)
@@ -299,5 +300,5 @@ def check(now: datetime | None = None, send: bool = True, symbols: list[str] | N
     _save(state, state_path)
     if send:
         for m in messages:
-            tg.send_message(m, admin_only=True)      # owner chat only, never the groups
+            tg.send_message(m, admin_only=not config.DAYTRADE_TO_GROUP)   # groups only with DAYTRADE_TO_GROUP
     return messages

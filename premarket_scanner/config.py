@@ -116,6 +116,7 @@ EA_FILES_DIR: str = _env_str("EA_FILES_DIR", "")              # empty = <MT5 Com
 EA_RISK_PCT: float = _env_float("EA_RISK_PCT", 1.0)            # % of balance risked per trade (lot sizing)
 EA_TP_R: float = _env_float("EA_TP_R", 1.0)                    # take-profit written to the request, in R (0 = none)
 EA_REQUEST_MAX_AGE_MIN: int = _env_int("EA_REQUEST_MAX_AGE_MIN", 15)
+EA_RESULTS_TO_GROUP: bool = _env_bool("EA_RESULTS_TO_GROUP", False)   # EA outcomes of confirmed signals (never the 🧪 tests)
 TELEGRAM_COMMANDS_ENABLED: bool = _env_bool("TELEGRAM_COMMANDS_ENABLED", True)   # buttons + /status /orders
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
@@ -155,12 +156,13 @@ FRIDAY_CUTOFF_UTC: int = _env_int("FRIDAY_CUTOFF_UTC", 15)   # no new signals on
 NEWS_BLACKOUT_MIN: int = _env_int("NEWS_BLACKOUT_MIN", 30)   # minutes before/after a high-impact release
 NEWS_CALENDAR_ENABLED: bool = _env_bool("NEWS_CALENDAR_ENABLED", True)   # ForexFactory weekly calendar
 
-# Paper day-trade test (owner chat only; nothing is sent to MT5 or the groups) --------
+# Paper day-trade test (owner chat; groups only with DAYTRADE_TO_GROUP; nothing is sent to MT5) --
 # Previous-day high/low breakout on 15-minute bars, flat by 16:00 New York; needs MT5.
 DAYTRADE_ENABLED: bool = _env_bool("DAYTRADE_ENABLED", False)
 DAYTRADE_SYMBOLS: list[str] = [
     s.strip().upper() for s in _env_str("DAYTRADE_SYMBOLS", "USDJPY").split(",") if s.strip()
 ]
+DAYTRADE_TO_GROUP: bool = _env_bool("DAYTRADE_TO_GROUP", False)   # false = owner chat only
 
 # News --------------------------------------------------------------------------
 BENZINGA_API_KEY: str = _env_str("BENZINGA_API_KEY", "")
