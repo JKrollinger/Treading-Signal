@@ -16,8 +16,14 @@ Every day, around the clock:
   new Trend-join Long entry appears (with entry, stop and target), and again when that
   signal hits the stop, the target, or weakens.
 
-The schedule is defined in New York time, so it stays correct through US daylight-saving
-changes no matter which time zone this machine uses.
+Weekdays, Bangkok time:
+
+* Group status: at GROUP_STATUS_TIME_BKK (08:00) the groups get one short note on each
+  watchlist symbol vs its 200-day average, unless an entry signal reached them in the last
+  24 hours (so a quiet group knows the bot is still watching).
+
+The schedule is defined in New York time (the group status in Bangkok time), so it stays
+correct through US daylight-saving changes no matter which time zone this machine uses.
 
 Examples:
     python scheduler.py                 # wait for the next job, run it, repeat
@@ -40,6 +46,7 @@ from premarket_scanner import telegram_notify as tg
 
 log = logging.getLogger("scheduler")
 ET = ZoneInfo(config.MARKET_TZ)
+BKK = ZoneInfo("Asia/Bangkok")
 
 
 def _parse_hhmm(text: str) -> dtime:
@@ -100,6 +107,7 @@ class Job:
     run: Callable[[], None]
     weekdays_only: bool = True
     send_report: bool = True
+    tz: ZoneInfo = ET              # time zone of ``times`` and of the weekday check
 
 
 def run_premarket() -> None:
@@ -146,6 +154,12 @@ def run_daytrade() -> None:
     messages = daytrade.check(send=True)
     if messages:
         log.info("Day-trade paper test: %d message(s)", len(messages))
+
+
+def run_group_status() -> None:
+    from premarket_scanner import group_status
+
+    group_status.send_daily()
 
 
 def notify(job_name: str, error: Exception | None = None) -> None:
@@ -204,6 +218,9 @@ def build_jobs() -> list[Job]:
     if config.DAYTRADE_ENABLED and config.DAYTRADE_SYMBOLS:
         jobs.append(Job(f"Day-trade paper test ({','.join(config.DAYTRADE_SYMBOLS)})", daytrade_slots(),
                         run_daytrade, weekdays_only=True, send_report=False))
+    if config.GROUP_STATUS_ENABLED and config.SPECIAL_WATCHLIST:
+        jobs.append(Job("Group daily status", [_parse_hhmm(config.GROUP_STATUS_TIME_BKK)], run_group_status,
+                        weekdays_only=True, send_report=False, tz=BKK))
     return jobs
 
 
@@ -217,7 +234,11 @@ def describe_schedule(jobs: list[Job]) -> str:
             parts.append(f"{j.name}: every {step} min, all day, {'weekdays' if j.weekdays_only else 'every day'} "
                          f"({len(ts)} checks)")
         else:
-            parts.append(f"{j.name}: {ts[0]}-{ts[-1]} ET, {len(ts)} run(s) ({', '.join(ts)})")
+            zone = "ET" if j.tz is ET else "Bangkok"
+            if len(ts) == 1:
+                parts.append(f"{j.name}: {ts[0]} {zone}, {'weekdays' if j.weekdays_only else 'every day'}")
+            else:
+                parts.append(f"{j.name}: {ts[0]}-{ts[-1]} {zone}, {len(ts)} run(s) ({', '.join(ts)})")
     return "\n".join(parts)
 
 
@@ -266,7 +287,8 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(3600)
         while True:
             now = datetime.now(ET)
-            job, due = min(((j, next_occurrence(now, j.times, j.weekdays_only)) for j in jobs), key=lambda x: x[1])
+            job, due = min(((j, next_occurrence(now.astimezone(j.tz), j.times, j.weekdays_only)) for j in jobs),
+                           key=lambda x: x[1])
             if job.send_report:
                 log.info(
                     "next: %s at %s ET (%s local)",

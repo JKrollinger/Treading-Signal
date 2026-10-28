@@ -75,6 +75,10 @@ GROUP_REPORT_SECTIONS: str = _env_str("GROUP_REPORT_SECTIONS", "")      # groups
 #   new = entry signals (Scanner B stocks, Scanner C, TradingView)   exit = T/P reached, stop hit, expiry
 #   trail = trailing stop moved   weakened = back below the breakout   held = signal held by the time filter
 GROUP_ALERTS: str = _env_str("GROUP_ALERTS", "new,exit")
+# Weekday status note for the groups when no entry signal reached them in the last 24 hours
+# (each watchlist symbol vs its 200-day average), so a quiet group knows the bot still watches
+GROUP_STATUS_ENABLED: bool = _env_bool("GROUP_STATUS_ENABLED", True)
+GROUP_STATUS_TIME_BKK: str = _env_str("GROUP_STATUS_TIME_BKK", "08:00")   # HH:MM Bangkok time, Mon-Fri
 # Scanner C alert look: compact = short signal-channel style (#no, entry, TP1, SL, WIN/LOSS
 # with a 30-day tally); detailed = the longer explanatory messages
 ALERT_STYLE: str = _env_str("ALERT_STYLE", "compact").lower()

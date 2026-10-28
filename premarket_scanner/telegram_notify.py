@@ -604,7 +604,11 @@ def send_alert(text: str, kind: str, owner: bool = True, reply_markup: dict | No
     """Send one trade alert. ``kind`` is new / exit / trail / weakened / held."""
     ok = send_message(text, admin_only=True, reply_markup=reply_markup) if owner else True
     if kind in group_alert_kinds() and extra_chat_ids():
-        ok = send_message(text, extras_only=True) and ok
+        sent = send_message(text, extras_only=True)
+        if sent and kind == "new":
+            from . import group_status   # local import: group_status imports this module
+            group_status.note_signal()   # a day with a signal needs no daily status note
+        ok = sent and ok
     return ok
 
 
