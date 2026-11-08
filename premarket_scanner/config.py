@@ -105,10 +105,16 @@ MT5_LOGIN: int = _env_int("MT5_LOGIN", 0)
 MT5_PASSWORD: str = _env_str("MT5_PASSWORD", "")
 MT5_SERVER: str = _env_str("MT5_SERVER", "")
 MT5_TIMEOUT_MS: int = _env_int("MT5_TIMEOUT_MS", 10_000)
+MT5_SERVER_TZ: str = _env_str("MT5_SERVER_TZ", "Europe/Athens")   # the broker's clock (MetaQuotes-Demo: EET with European DST)
 MT5_AUTOSTART: bool = _env_bool("MT5_AUTOSTART", True)   # false = never start the terminal, only use one you opened
 # Read-only portfolio report (your MT5 account: open positions, floating P/L, closes)
 PORTFOLIO_ENABLED: bool = _env_bool("PORTFOLIO_ENABLED", True)
 PORTFOLIO_TO_GROUP: bool = _env_bool("PORTFOLIO_TO_GROUP", False)   # false = owner chat only
+
+# Live dashboard: local web page with the MT5 account, charts and the trade journal (read-only)
+DASHBOARD_ENABLED: bool = _env_bool("DASHBOARD_ENABLED", True)
+DASHBOARD_BIND: str = _env_str("DASHBOARD_BIND", "127.0.0.1")   # local only: it shows the account
+DASHBOARD_PORT: int = _env_int("DASHBOARD_PORT", 8790)
 
 # EA bridge: Telegram "confirm" button -> order request file -> your Expert Advisor in MT5
 EA_BRIDGE_ENABLED: bool = _env_bool("EA_BRIDGE_ENABLED", True)

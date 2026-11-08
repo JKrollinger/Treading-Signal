@@ -228,6 +228,30 @@ drag it from Navigator > Expert Advisors onto any chart > tick "Allow Algo Tradi
 the AutoTrading toolbar button. Keep `InpDryRun = true` until a `/test` request comes back
 as `DRYRUN` in Telegram and you have reviewed the plan it prints.
 
+## Live dashboard and trade journal (read-only)
+
+The scheduler also starts a local web page at **http://127.0.0.1:8790**, fed by the MT5
+terminal about once a second. It reads the account and never sends anything to the broker.
+It only listens on this PC (it shows account figures) and is not behind the tunnel.
+
+- **Live overview:** balance, equity, floating and realised P/L, open positions with their S/L
+  and T/P, and a candle chart from the broker's own bars with every entry and exit marked, the
+  bot's signals, yesterday's high/low and the 200-day average.
+- **P/L journal:** every closed position from the deal history, kept in
+  `data/journal_<login>.json` (one file per account), with the cumulative curve and daily P/L.
+- **Entry and exit analysis:** each trade is checked against the Trend-join rules as they stood
+  at that moment, then against what price did during and after it (MFE, MAE, how much was kept).
+  The results add up to what costs money, risky habits and what works. EA system tests are left
+  out of this page. Below about 30 trades the statistics are only a hint.
+- **Bot signals:** every signal the bot issued, why, and how it ended.
+
+Click a trade for its reasons and to write your own note. A new position's S/L is recorded from
+the moment the dashboard sees it: MT5's history only keeps the S/L set in the opening order.
+
+It follows whichever account is logged in to MT5. It never starts MT5 when `MT5_AUTOSTART=false`;
+while MT5 is closed the journal stays readable and the live parts wait. Run it alone with
+`python dashboard_server.py`; its log is `logs/dashboard.log`.
+
 ## Backtest of the Trend-join Long rules
 
 `backtest_trend_join.py` replays the rules on hourly history: yesterday's close above the
@@ -631,6 +655,8 @@ overwrites that day's file.
 | `SPECIAL_DATA_SOURCE` | `tradingview` | `tradingview` (real-time, symbols like `OANDA:XAUUSD`), `mt5` (your broker via MetaTrader 5, symbols like `XAUUSD`) or `yahoo` (symbols like `GC=F`). |
 | `MT5_PATH` / `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | empty | Optional MetaTrader 5 connection details; empty attaches to the terminal already logged in. |
 | `MT5_AUTOSTART` | `true` | `false` = the bot never starts MT5 itself. While MT5 is closed, Scanner C uses TradingView prices, and the position alerts, confirm button and day-trade test wait. The bot attaches again within one cycle after you open MT5. |
+| `MT5_SERVER_TZ` | `Europe/Athens` | Time zone of the broker's clock, used by the dashboard to convert MT5 times. |
+| `DASHBOARD_ENABLED` / `DASHBOARD_PORT` | `true` / `8790` | Local live dashboard started by the scheduler. |
 | `PORTFOLIO_ENABLED` | `true` | Account section in the owner's report and open/close position alerts. |
 | `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
 | `EA_BRIDGE_ENABLED` | `true` | Confirm button on MT5-quoted signals; order requests written for the EA. |
@@ -719,11 +745,14 @@ premarket_scanner/
   translate.py          English -> Thai headline translation with disk cache
 special_watch_once.py   one manual Scanner C check (--status / --no-send)
 tv_webhook_server.py    run the webhook receiver alone, or --test to post a sample alert
+dashboard_server.py     run the live dashboard alone (the scheduler also starts it)
 tunnel_url.py           print (or --send to Telegram) the current TradingView webhook URL
 mt5_probe.py            check the MetaTrader 5 connection and list broker symbols
 backtest_trend_join.py  replay the Trend-join Long rules on hourly history (Yahoo or MT5)
 premarket_scanner/tunnel.py       Cloudflare quick tunnel supervisor used by the scheduler
 premarket_scanner/mt5_source.py   MetaTrader 5 prices, levels and hourly history (read-only)
+premarket_scanner/trade_journal.py   closed-trade journal, entry/exit analysis and statistics
+premarket_scanner/dashboard.py    live dashboard server; dashboard.html is the page
 premarket_scanner/mt5_portfolio.py account snapshot + position opened/closed alerts (read-only)
 premarket_scanner/ea_bridge.py    order request / result files for the EA, risk-based lot sizing
 premarket_scanner/telegram_commands.py  owner-only buttons and /commands (long polling)

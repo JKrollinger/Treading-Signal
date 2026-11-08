@@ -275,6 +275,9 @@ def main(argv: list[str] | None = None) -> int:
     if config.TELEGRAM_COMMANDS_ENABLED:
         from premarket_scanner import telegram_commands
         telegram_commands.start_in_background()
+    if config.DASHBOARD_ENABLED:
+        from premarket_scanner import dashboard
+        dashboard.start_child()
 
     if args.run_now:
         for job in jobs:
