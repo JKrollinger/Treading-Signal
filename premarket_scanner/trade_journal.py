@@ -29,13 +29,13 @@ import numpy as np
 
 from . import config, ea_bridge, filters
 from .mt5_portfolio import DEAL_REASON_TH
+from .mt5_source import server_to_utc, utc_to_server  # noqa: F401 - utc_to_server is used by the dashboard
 
 log = logging.getLogger(__name__)
 
 UTC = timezone.utc
 NY, BKK = ZoneInfo("America/New_York"), ZoneInfo("Asia/Bangkok")
-SERVER_TZ = ZoneInfo(config.MT5_SERVER_TZ)
-ANALYSIS_VERSION = 1                         # bump to re-analyse every stored trade
+ANALYSIS_VERSION = 1                        # bump to re-analyse every stored trade
 HISTORY_START = datetime(2015, 1, 1, tzinfo=UTC)
 EA_MAGIC = 20261022                          # InpMagic of mt5_ea/SignalBotBridge.mq5
 AFTER_EXIT_HOURS = 24
@@ -81,20 +81,6 @@ TAGS: dict[str, tuple[str, str, str]] = {
 
 
 # Time ----------------------------------------------------------------------------------
-def server_to_utc(epoch: float) -> datetime:
-    """MT5 counts the broker's wall clock as if it were UTC; undo that.
-
-    Uses the broker's time zone (MT5_SERVER_TZ), not mt5_source._to_utc: that one is estimated
-    from the latest tick, which is off by days while the market is closed.
-    """
-    return datetime.fromtimestamp(float(epoch), UTC).replace(tzinfo=SERVER_TZ).astimezone(UTC)
-
-
-def utc_to_server(dt: datetime) -> datetime:
-    """A real time on the broker's clock, encoded as UTC (what copy_rates_* compares against)."""
-    return dt.astimezone(SERVER_TZ).replace(tzinfo=UTC)
-
-
 def _srv_dt(epoch: float) -> datetime:
     return datetime.fromtimestamp(float(epoch), UTC)
 

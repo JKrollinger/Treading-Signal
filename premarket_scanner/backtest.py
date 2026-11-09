@@ -160,7 +160,7 @@ def load_mt5_bars(symbol: str, timeframe: str = "M5", count: int = 99_999) -> pd
     df = pd.DataFrame(rates)
     df.index = pd.to_datetime(df["time"], unit="s")          # naive = server time
     out = df[["open", "high", "low", "close"]].copy()
-    out.attrs["tz_offset_hours"] = mt5_source.server_offset_hours(symbol)
+    out.attrs["tz_offset_hours"] = mt5_source.server_offset_hours()
     return out
 
 

@@ -4,7 +4,7 @@ These are the rules that came out best in the 4-year forex day-trade backtest (1
 pairs, real-account costs). Only USDJPY was clearly positive there, and that may be luck,
 so this runs on paper first to see whether it holds on new data:
 
-* trading day = the FX day, which starts at 17:00 New York (MT5 server clock = New York + 7 h)
+* trading day = the FX day, which starts at 17:00 New York
 * window 07:00 London .. 12:00 New York: the first completed M15 bar that closes above
   yesterday's high goes long, below yesterday's low goes short; one trade per day
 * entry = that bar's close; stop = 0.5 x daily ATR(14) as of yesterday; T/P = 1R
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 UTC = timezone.utc
 NY, LON, BKK = ZoneInfo("America/New_York"), ZoneInfo("Europe/London"), ZoneInfo("Asia/Bangkok")
-SERVER_MINUS_NY = timedelta(hours=7)          # FX convention: server midnight = 17:00 New York
+FX_DAY_SHIFT = timedelta(hours=7)             # 17:00 New York + 7 h = midnight: the date becomes the FX day
 WINDOW_START_LON = dtime(7, 0)
 WINDOW_END_NY = dtime(12, 0)
 FLAT_BY_NY = dtime(16, 0)
@@ -54,14 +54,9 @@ def results_file() -> Path:
 
 
 # Time ---------------------------------------------------------------------------------
-def _to_server(dt_utc: datetime) -> datetime:
-    """A real time as the broker's server clock, encoded as UTC (what copy_rates_* compares)."""
-    ny = dt_utc.astimezone(NY).replace(tzinfo=None)
-    return (ny + SERVER_MINUS_NY).replace(tzinfo=UTC)
-
-
 def fx_day(now_utc: datetime) -> date:
-    return (now_utc.astimezone(NY).replace(tzinfo=None) + SERVER_MINUS_NY).date()
+    """The FX day: rolls over at 17:00 New York all year, whatever the broker's clock does."""
+    return (now_utc.astimezone(NY).replace(tzinfo=None) + FX_DAY_SHIFT).date()
 
 
 def window(day: date) -> tuple[datetime, datetime, datetime]:
@@ -80,19 +75,24 @@ def _bars(symbol: str, tf: str, start_utc: datetime, end_utc: datetime) -> pd.Da
     """Bars of ``tf`` from MT5 with real UTC start/end times."""
     mt5 = mt5_source._mt5()
     mt5.symbol_select(symbol, True)
-    rates = mt5.copy_rates_range(symbol, getattr(mt5, f"TIMEFRAME_{tf}"), _to_server(start_utc), _to_server(end_utc))
+    rates = mt5.copy_rates_range(symbol, getattr(mt5, f"TIMEFRAME_{tf}"),
+                                 mt5_source.utc_to_server(start_utc), mt5_source.utc_to_server(end_utc))
     if rates is None or len(rates) == 0:
         return pd.DataFrame(columns=["start", "end", "open", "high", "low", "close"])
     df = pd.DataFrame(rates)
-    server = pd.DatetimeIndex(pd.to_datetime(df["time"], unit="s"))
-    start = (server - SERVER_MINUS_NY).tz_localize(NY, ambiguous=False, nonexistent="shift_forward").tz_convert(UTC)
+    start = pd.DatetimeIndex([mt5_source.server_to_utc(t) for t in df["time"]])
     df["start"] = start
     df["end"] = start + pd.Timedelta(minutes=TF_MINUTES[tf])
     return df[["start", "end", "open", "high", "low", "close"]].reset_index(drop=True)
 
 
 def levels(symbol: str, day: date) -> dict | None:
-    """Yesterday's high/low/close and the daily ATR(14) as of yesterday (server-day D1 bars)."""
+    """Yesterday's high/low/close and the daily ATR(14) as of yesterday (server-day D1 bars).
+
+    ``day`` is an FX day but is used as a server date: _check_symbol calls this only after
+    that day's London open, when the two always agree (they can differ for an hour at the
+    rollover, while the broker and New York are 6 h apart).
+    """
     mt5 = mt5_source._mt5()
     mt5.symbol_select(symbol, True)
     day_start = datetime.combine(day, dtime(0, 0), UTC)       # server midnight, server-encoded

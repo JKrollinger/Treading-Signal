@@ -77,7 +77,7 @@ def _broker_extreme(mt5, symbol: str, side: str, ts_utc: datetime, point: float)
     if rates is None or len(rates) == 0:
         return None
     lo, hi = ts_utc - timedelta(minutes=2), ts_utc + timedelta(minutes=1)
-    picked = [r for r in rates if lo <= mt5_source._to_utc(r["time"]) <= hi]
+    picked = [r for r in rates if lo <= mt5_source.server_to_utc(r["time"]) <= hi]
     if not picked:
         return None
     if side == "buy":
@@ -99,7 +99,6 @@ def check(position: dict, close: dict, now: datetime | None = None) -> StopCheck
     now = now or datetime.now(timezone.utc)
 
     mt5 = mt5_source._mt5()
-    mt5_source.server_offset_hours(symbol)          # make sure server-time conversion is set
     info = mt5.symbol_info(symbol)
     digits = int(info.digits) if info else 5
     point = float(info.point) if info else 0.0

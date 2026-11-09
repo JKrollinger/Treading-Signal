@@ -27,9 +27,9 @@ from . import config
 log = logging.getLogger(__name__)
 
 ET = ZoneInfo(config.MARKET_TZ)
+SERVER_TZ = ZoneInfo(config.MT5_SERVER_TZ)
 _lock = threading.Lock()
 _connected = False
-_server_offset: float | None = None   # broker server clock minus UTC, seconds
 _lost_at: float | None = None         # monotonic time the terminal went away
 _closed_logged = False                # "not starting MT5" already logged for this closed spell
 REATTACH_GRACE_S = 60                 # MT5_AUTOSTART=false: leave a closing terminal alone this long
@@ -135,16 +135,18 @@ def list_symbols(pattern: str | None = None) -> list[str]:
     return [s.name for s in (syms or [])]
 
 
-def _to_utc(server_epoch: int | float) -> datetime:
-    """MT5 timestamps are the broker's server clock encoded as if UTC; correct the offset."""
-    return datetime.fromtimestamp(float(server_epoch) - (_server_offset or 0.0), timezone.utc)
+def server_to_utc(epoch: int | float) -> datetime:
+    """MT5 counts the broker's wall clock as if it were UTC; undo that.
+
+    Uses the broker's time zone (MT5_SERVER_TZ) and never the latest tick: while the market
+    is closed that tick is days old, and measuring the offset from it makes it look current.
+    """
+    return datetime.fromtimestamp(float(epoch), timezone.utc).replace(tzinfo=SERVER_TZ).astimezone(timezone.utc)
 
 
-def _update_server_offset(latest_tick_epoch: float) -> None:
-    """Estimate the server-clock offset from the freshest tick (rounded to 15 minutes)."""
-    global _server_offset
-    raw = latest_tick_epoch - time.time()
-    _server_offset = round(raw / 900.0) * 900.0
+def utc_to_server(dt: datetime) -> datetime:
+    """A real time on the broker's clock, encoded as UTC (what copy_rates_* compares against)."""
+    return dt.astimezone(SERVER_TZ).replace(tzinfo=timezone.utc)
 
 
 def _fresh_tick(mt5, symbol: str, tries: int = 6):
@@ -189,9 +191,6 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
         tick = _fresh_tick(mt5, s)
         if tick is not None:
             ticks[s] = tick
-    live = [t.time for t in ticks.values() if t.bid or t.last]
-    if live:
-        _update_server_offset(max(live))
 
     for s, tick in ticks.items():
         info = mt5.symbol_info(s)
@@ -232,23 +231,15 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
             "currency": getattr(info, "currency_profit", "") or "",
             "digits": getattr(info, "digits", None),
             "spread_points": getattr(info, "spread", None),
-            "quote_time": _to_utc(tick.time).astimezone(ET),
+            "quote_time": server_to_utc(tick.time).astimezone(ET),
             "change_pct": (price / float(yday["close"]) - 1.0) * 100.0 if yday["close"] else None,
         }
     return out
 
 
-def server_offset_hours(symbol: str = "EURUSD") -> float:
-    """Broker server clock minus UTC, in hours (estimated from a fresh tick)."""
-    mt5 = _mt5()
-    if not connect():
-        return 0.0
-    if _server_offset is None:
-        mt5.symbol_select(symbol, True)
-        tick = _fresh_tick(mt5, symbol)
-        if tick is not None and tick.time:
-            _update_server_offset(float(tick.time))
-    return (_server_offset or 0.0) / 3600.0
+def server_offset_hours() -> float:
+    """Broker server clock minus UTC right now, in hours."""
+    return datetime.now(SERVER_TZ).utcoffset().total_seconds() / 3600.0
 
 
 def hourly_history(symbol: str, days: int = 730) -> pd.DataFrame:
@@ -269,5 +260,5 @@ def hourly_history(symbol: str, days: int = 730) -> pd.DataFrame:
     df = pd.DataFrame(rates)
     df.index = pd.to_datetime(df["time"], unit="s")          # naive = server time
     df = df[["open", "high", "low", "close", "tick_volume"]].rename(columns={"tick_volume": "volume"})
-    df.attrs["tz_offset_hours"] = server_offset_hours(symbol)
+    df.attrs["tz_offset_hours"] = server_offset_hours()
     return df

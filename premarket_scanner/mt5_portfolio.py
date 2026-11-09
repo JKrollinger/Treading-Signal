@@ -51,7 +51,7 @@ def _save(state: dict) -> None:
 
 
 def _utc(server_epoch) -> datetime:
-    return mt5_source._to_utc(server_epoch)
+    return mt5_source.server_to_utc(server_epoch)
 
 
 def _position_dict(p) -> dict:
@@ -72,12 +72,10 @@ def snapshot() -> dict | None:
     acc = mt5.account_info()
     if acc is None:
         return None
-    mt5_source.server_offset_hours()
     positions = [_position_dict(p) for p in (mt5.positions_get() or [])]
     now = datetime.now(timezone.utc)
     deals = mt5.history_deals_get(now - timedelta(hours=36), now + timedelta(hours=6)) or []
-    offset = mt5_source._server_offset or 0.0
-    today_server = datetime.fromtimestamp(now.timestamp() + offset, timezone.utc).date()
+    today_server = mt5_source.utc_to_server(now).date()
     closed_today = []
     for d in deals:
         if d.entry not in (1, 3):               # closing deals only
