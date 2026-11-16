@@ -69,6 +69,13 @@ class Params:
     level_minutes: int | None = None
     cost_abs: float | None = None      # round-trip cost in price units (spread + commission); overrides cost_pct
     hod_tol_atr: float | None = None   # "at the high of the period" tolerance in ATRs; overrides hod_tol_pct
+    # squeeze filter: yesterday must be a narrow day. "nr7" = the smallest range of the last 7 days,
+    # "inside" = inside the day before (lower high and higher low), "either" = one of the two
+    squeeze: str | None = None
+    # room filter: no entry while the highest high of the ``room_lookback`` days before today is
+    # above the entry price by less than ``room_atr`` ATRs (resistance too close; mirrored for shorts)
+    room_atr: float | None = None
+    room_lookback: int = 20
 
 
 @dataclass
@@ -200,10 +207,22 @@ def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
     daily["adx"] = _wilder(dx.fillna(0.0), 14)
     if p.sma_slope_days:
         daily["sma_slope"] = daily["sma"] - daily["sma"].shift(p.sma_slope_days)
-    for col in ("high", "low", "close", "sma", "atr", "adx", "atr_med100", "sma_slope"):
+    rng = daily["high"] - daily["low"]
+    daily["nr7"] = (rng <= rng.rolling(7).min()).astype(float).where(rng.rolling(7).count() == 7)
+    daily["inside"] = ((daily["high"] < daily["high"].shift(1)) & (daily["low"] > daily["low"].shift(1)))         .astype(float).where(daily["high"].shift(1).notna())
+    daily["hh"] = daily["high"].rolling(p.room_lookback).max()
+    daily["ll"] = daily["low"].rolling(p.room_lookback).min()
+    for col in ("high", "low", "close", "sma", "atr", "adx", "atr_med100", "sma_slope", "nr7", "inside", "hh", "ll"):
         if col in daily:
             daily[f"y_{col}"] = daily[col].shift(1)
     return daily
+
+
+def _squeezed(y, mode: str) -> bool:
+    nr7, inside = y.get("y_nr7"), y.get("y_inside")
+    nr7 = bool(nr7) if not pd.isna(nr7) else False
+    inside = bool(inside) if not pd.isna(inside) else False
+    return {"nr7": nr7, "inside": inside, "either": nr7 or inside}[mode]
 
 
 def in_news_blackout(d: date, utc_hour: int) -> bool:
@@ -236,6 +255,7 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
     y = None
     day_side: str | None = None      # "long" / "short" when today may trade, else None
     traded_today = False
+    blocked_today = False            # the room filter already refused a bar today (counted once a day)
     open_until = -1
     days_tested = 0
     allowed = {"long": ("long",), "short": ("short",), "both": ("long", "short")}[p.side]
@@ -243,7 +263,7 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
     for i in range(n):
         d = bar_dates[i]
         if d != cur_day:
-            cur_day, hod, lod, traded_today = d, -math.inf, math.inf, False
+            cur_day, hod, lod, traded_today, blocked_today = d, -math.inf, math.inf, False, False
             row = daily.loc[d] if d in daily.index else None
             y = None
             if row is not None and not any(pd.isna(row[k]) for k in ("y_high", "y_low", "y_close", "y_sma", "y_atr")):
@@ -263,6 +283,8 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
                     skipped["volatility_extreme"] += 1
                 elif p.sma_slope_days and (np.isnan(slope) or (slope <= 0 if trend == "long" else slope >= 0)):
                     skipped["sma_falling" if trend == "long" else "sma_rising"] += 1
+                elif p.squeeze and not _squeezed(y, p.squeeze):
+                    skipped["no_squeeze"] += 1
                 else:
                     day_side = trend
         hod = max(hod, highs[i])
@@ -284,6 +306,14 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
         elif not (c < float(y["y_low"]) and at_extreme):
             # mirror: breakdown below yesterday's low while at the low of the day
             continue
+        if p.room_atr is not None:
+            wall = y["y_hh"] if is_long else y["y_ll"]
+            gap = (float(wall) - c) if is_long else (c - float(wall))
+            if not pd.isna(wall) and 0 < gap < p.room_atr * float(y["y_atr"]):
+                if not blocked_today:
+                    skipped["resistance_near"] += 1
+                blocked_today = True
+                continue
         h = int(utc_hours[i])
         if p.session_utc and not (p.session_utc[0] <= h < p.session_utc[1]):
             skipped["outside_session"] += 1
