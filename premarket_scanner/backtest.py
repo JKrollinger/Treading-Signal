@@ -76,6 +76,15 @@ class Params:
     # above the entry price by less than ``room_atr`` ATRs (resistance too close; mirrored for shorts)
     room_atr: float | None = None
     room_lookback: int = 20
+    # pullback to the daily EMA (``ema_period``), two ways to use it:
+    # * ``pullback_atr`` with the normal breakout entry: one of the last ``pullback_days`` days must
+    #   have dipped to within that many ATRs of the EMA (pullback first, then the breakout)
+    # * ``entry_mode="ema_touch"``: no breakout at all. Yesterday closed above the EMA; buy the bar
+    #   that dips to the EMA (plus ``pullback_atr`` ATRs of slack) and closes back above it
+    ema_period: int = 20
+    pullback_atr: float | None = None
+    pullback_days: int = 1
+    entry_mode: str = "breakout"
 
 
 @dataclass
@@ -210,9 +219,14 @@ def daily_levels(bars: pd.DataFrame, p: Params) -> pd.DataFrame:
     rng = daily["high"] - daily["low"]
     daily["nr7"] = (rng <= rng.rolling(7).min()).astype(float).where(rng.rolling(7).count() == 7)
     daily["inside"] = ((daily["high"] < daily["high"].shift(1)) & (daily["low"] > daily["low"].shift(1)))         .astype(float).where(daily["high"].shift(1).notna())
+    daily["ema"] = daily["close"].ewm(span=p.ema_period, adjust=False).mean().where(
+        daily["close"].expanding().count() >= p.ema_period)
+    slack = (p.pullback_atr or 0.0) * daily["atr"]
+    daily["dip"] = (daily["low"] <= daily["ema"] + slack).astype(float).rolling(p.pullback_days).max()   # longs
+    daily["pop"] = (daily["high"] >= daily["ema"] - slack).astype(float).rolling(p.pullback_days).max()  # shorts
     daily["hh"] = daily["high"].rolling(p.room_lookback).max()
     daily["ll"] = daily["low"].rolling(p.room_lookback).min()
-    for col in ("high", "low", "close", "sma", "atr", "adx", "atr_med100", "sma_slope", "nr7", "inside", "hh", "ll"):
+    for col in ("high", "low", "close", "sma", "atr", "adx", "atr_med100", "sma_slope", "nr7", "inside", "hh", "ll", "ema", "dip", "pop"):
         if col in daily:
             daily[f"y_{col}"] = daily[col].shift(1)
     return daily
@@ -285,6 +299,13 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
                     skipped["sma_falling" if trend == "long" else "sma_rising"] += 1
                 elif p.squeeze and not _squeezed(y, p.squeeze):
                     skipped["no_squeeze"] += 1
+                elif p.entry_mode == "ema_touch" and (pd.isna(y["y_ema"]) or (
+                        float(y["y_close"]) <= float(y["y_ema"]) if trend == "long"
+                        else float(y["y_close"]) >= float(y["y_ema"]))):
+                    skipped["wrong_side_of_ema"] += 1
+                elif p.entry_mode == "breakout" and p.pullback_atr is not None and \
+                        y["y_dip" if trend == "long" else "y_pop"] != 1.0:
+                    skipped["no_pullback"] += 1
                 else:
                     day_side = trend
         hod = max(hod, highs[i])
@@ -299,7 +320,14 @@ def run_symbol(symbol: str, bars: pd.DataFrame, p: Params, source: str) -> Symbo
         else:
             at_extreme = (c >= hod * (1.0 - p.hod_tol_pct / 100.0)) if is_long else \
                 (c <= lod * (1.0 + p.hod_tol_pct / 100.0))
-        if is_long:
+        if p.entry_mode == "ema_touch":
+            ema = float(y["y_ema"])
+            slack_abs = (p.pullback_atr or 0.0) * float(y["y_atr"])
+            if is_long and not (lows[i] <= ema + slack_abs and c > ema):
+                continue
+            if not is_long and not (highs[i] >= ema - slack_abs and c < ema):
+                continue
+        elif is_long:
             # breakout above yesterday's high while at the high of the day
             if not (c > float(y["y_high"]) and at_extreme):
                 continue
