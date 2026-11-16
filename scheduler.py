@@ -278,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
     if config.DASHBOARD_ENABLED:
         from premarket_scanner import dashboard
         dashboard.start_child()
+        if dashboard.remote_ready():
+            dashboard_tunnel = tunnel.start_dashboard_tunnel()      # dies with this process (job object)
+        elif config.DASHBOARD_REMOTE_ENABLED:
+            log.warning("dashboard tunnel not started: no password yet (python dashboard_password.py)")
 
     if args.run_now:
         for job in jobs:

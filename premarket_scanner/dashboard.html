@@ -353,7 +353,7 @@ td.tick-down{animation:flashDown .9s ease-out}
     <button class="btn danger" id="halt-big">⏻ หยุดส่งคำสั่งใหม่</button></div>
 </section>
 
-<footer class="footnote">GOLD TERMINAL · ข้อมูลจาก MT5 บัญชีที่ล็อกอินอยู่ · บอทไม่ส่งคำสั่งเอง (EA ส่งเมื่อคุณกดยืนยัน) · สถิติเป็นผลย้อนหลังเพื่อทบทวนการเทรด ไม่ใช่คำแนะนำการลงทุน · เวลาทั้งหมดเป็นเวลาไทย · <a href="/classic" style="color:#c9a86a">หน้าแดชบอร์ดแบบเดิม</a></footer>
+<footer class="footnote">GOLD TERMINAL · ข้อมูลจาก MT5 บัญชีที่ล็อกอินอยู่ · บอทไม่ส่งคำสั่งเอง (EA ส่งเมื่อคุณกดยืนยัน) · สถิติเป็นผลย้อนหลังเพื่อทบทวนการเทรด ไม่ใช่คำแนะนำการลงทุน · เวลาทั้งหมดเป็นเวลาไทย · <a href="/classic" style="color:#c9a86a">หน้าแดชบอร์ดแบบเดิม</a><form method="post" action="/logout" id="logout" hidden style="display:inline"> · <button class="btn secondary small" type="submit">ออกจากระบบ</button></form></footer>
 </main>
 </div>
 <aside id="drawer" hidden aria-label="รายละเอียดไม้"></aside>
@@ -404,7 +404,7 @@ function ago(sec){ if (sec == null) return '-'; if (sec < 60) return `${Math.rou
 const sidePill = s => `<span class="pill ${s === 'buy' ? 'buy' : 'sell'}">${s === 'buy' ? '▲ ซื้อ' : '▼ ขาย'}</span>`;
 const mark = ok => `<span class="m ${ok === true ? 'ok' : ok === false ? 'no' : ''}">${ok === true ? '✓' : ok === false ? '✗' : '–'}</span>`;
 function setHTML(el, html){ if (el && el.dataset.h !== html){ el.innerHTML = html; el.dataset.h = html; } }
-async function api(path, opt){ const r = await fetch(path, opt); return r.json(); }
+async function api(path, opt){ const r = await fetch(path, opt); if (r.status === 401){ location.reload(); throw new Error('signed out'); } return r.json(); }
 function toast(text){ const e = $('#toast'); e.textContent = text; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => { e.style.display = 'none'; }, 3500); }
 const bkkDay = sec => bkk(sec).toISOString().slice(0, 10);
 const halted = () => !!(S.sys && S.sys.halt && S.sys.halt.halted);
@@ -1343,6 +1343,7 @@ async function pollSystem(){
 let resizeTimer;
 addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { renderMonthly(); if (S.journal) renderTradeBars(S.journal.trades); }, 150); });
 
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) $('#logout').hidden = false;   // opened through the tunnel
 navigate((location.hash || '#overview').slice(1));
 addEventListener('hashchange', () => navigate(location.hash.slice(1)));
 poll();

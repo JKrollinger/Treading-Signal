@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, ea_bridge, filters, mt5_source, risk_gate
+from . import config, dashboard_auth, ea_bridge, filters, mt5_source, risk_gate
 from . import trade_journal as journal
 from .special import display_name
 
@@ -53,6 +53,17 @@ SCHEDULER_LOG = config.PROJECT_ROOT / "logs" / "scheduler.log"
 LOG_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 JOURNAL_RE = re.compile(r"^journal_(\d+)\.json$")
 RISK_EVERY_S = 3.0
+LOGIN_PAGE = """<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Gold Terminal · เข้าสู่ระบบ</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07090c;color:#f0f1f2;font:14px system-ui,'Segoe UI','Leelawadee UI',sans-serif}
+form{width:min(340px,calc(100vw - 32px));padding:26px;border:1px solid #77592f;border-radius:14px;background:linear-gradient(150deg,#14181b,#0b0e11)}
+h1{font-size:19px;margin:0 0 4px;color:#ebbd65;letter-spacing:.5px}p{margin:0 0 18px;color:#8f969f;font-size:12px}
+input{width:100%;box-sizing:border-box;padding:11px;border-radius:8px;border:1px solid #685332;background:#12181d;color:#f2e4cb;font-size:15px}
+button{width:100%;margin-top:12px;padding:11px;border-radius:8px;border:1px solid #806038;background:linear-gradient(110deg,#b58a45,#483419);color:#fff8e9;font-size:14px;cursor:pointer}
+.err{margin:12px 0 0;color:#ff8d96;font-size:12px}</style></head><body>
+<form method="post" action="/login"><h1>GOLD TERMINAL</h1><p>ใส่รหัสผ่านเพื่อเปิดแดชบอร์ด</p>
+<input type="password" name="password" autocomplete="current-password" aria-label="รหัสผ่าน" autofocus required>
+<button type="submit">เข้าสู่ระบบ</button>__ERROR__</form></body></html>"""
 EA_ONLINE_S = 60                # heartbeat younger than this: the EA is on a chart and running
 LIVE_POLL_S = 1.0
 CLOSED_POLL_S = 10.0            # MT5 closed: look for it now and then (it is never started from here)
@@ -512,9 +523,15 @@ def _float(text) -> float | None:
 
 class _Handler(BaseHTTPRequestHandler):
     hub: Hub
+    remote = False                  # True on the port behind the tunnel: every request needs a session
+    sessions: dashboard_auth.Sessions | None = None
 
-    def _send(self, status: int, body: bytes, kind: str, cache: bool = False) -> None:
+    def _send(self, status: int, body: bytes, kind: str, cache: bool = False, extra: dict | None = None) -> None:
         self.send_response(status)
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "max-age=86400" if cache else "no-store")
@@ -530,11 +547,54 @@ class _Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         return host in ("127.0.0.1", "localhost", "[::1]")
 
+    # Remote port ---------------------------------------------------------------------
+    def _token(self) -> str | None:
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == dashboard_auth.COOKIE:
+                return value
+        return None
+
+    def _signed_in(self) -> bool:
+        return self.sessions is not None and self.sessions.valid(self._token())
+
+    def _login_page(self, status: int = 200, error: str = "") -> None:
+        note = f'<div class="err">{error}</div>' if error else ""
+        self._send(status, LOGIN_PAGE.replace("__ERROR__", note).encode("utf-8"), "text/html; charset=utf-8")
+
+    def _login(self, length: int) -> None:
+        who = self.headers.get("Cf-Connecting-Ip") or self.client_address[0]
+        wait = self.sessions.locked_for()
+        if wait:
+            self._login_page(429, f"ใส่รหัสผิดหลายครั้ง ลองใหม่ในอีก {wait // 60 + 1} นาที")
+            return
+        form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        token = self.sessions.login((form.get("password") or [""])[0])
+        if token is None:
+            time.sleep(1.0)
+            locked = self.sessions.locked_for()
+            log.warning("dashboard: wrong password from %s%s", who, " (login locked)" if locked else "")
+            if locked:
+                _tell_owner("⚠️ มีการใส่รหัสผ่านแดชบอร์ดผิด 5 ครั้งติดกัน ระบบล็อกการเข้าสู่ระบบ 15 นาที "
+                            "ถ้าไม่ใช่คุณ ให้เปลี่ยนรหัสผ่าน (python dashboard_password.py) แล้วรีสตาร์ตบอท")
+            self._login_page(401, "รหัสผ่านไม่ถูกต้อง")
+            return
+        log.info("dashboard: signed in from %s", who)
+        cookie = f"{dashboard_auth.COOKIE}={token}; Path=/; Max-Age={dashboard_auth.SESSION_S}; HttpOnly; Secure; SameSite=Strict"
+        self._send(303, b"", "text/plain", extra={"Location": "/", "Set-Cookie": cookie})
+
     def do_GET(self) -> None:  # noqa: N802
-        if not self._local_host():
+        url = urlparse(self.path)
+        if self.remote:
+            if not self._signed_in():
+                if url.path.startswith(("/api/", "/static/")):
+                    self._json(401, {"ok": False, "error": "sign in"})
+                else:
+                    self._login_page()
+                return
+        elif not self._local_host():
             self._json(403, {"ok": False, "error": "forbidden"})
             return
-        url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         try:
             if url.path == "/":
@@ -569,11 +629,27 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         origin = self.headers.get("Origin")
         same_origin = origin is None or urlparse(origin).netloc == self.headers.get("Host")
+        length = int(self.headers.get("Content-Length") or 0)
+        path = urlparse(self.path).path
+        if self.remote:
+            if origin is None or not same_origin or length > MAX_BODY:      # a browser always sends Origin on POST
+                self._json(403, {"ok": False, "error": "forbidden"})
+            elif path == "/login":
+                self._login(length)
+            elif path == "/logout":
+                self.sessions.logout(self._token())
+                self._send(303, b"", "text/plain", extra={"Location": "/", "Set-Cookie": f"{dashboard_auth.COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict"})
+            elif not self._signed_in():
+                self._json(401, {"ok": False, "error": "sign in"})
+            else:
+                self._post(path, length)
+            return
         if not self._local_host() or not same_origin:
             self._json(403, {"ok": False, "error": "forbidden"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
-        path = urlparse(self.path).path
+        self._post(path, length)
+
+    def _post(self, path: str, length: int) -> None:
         if path not in ("/api/note", "/api/halt") or length > MAX_BODY:
             self._json(400, {"ok": False})
             return
@@ -600,12 +676,32 @@ def _chart_args(q: dict) -> tuple[str | None, str | None]:
     return (symbol, tf) if SYMBOL_RE.match(symbol) and tf in TIMEFRAMES else (None, None)
 
 
+def _tell_owner(text: str) -> None:
+    try:
+        from . import telegram_notify
+        telegram_notify.send_message(text, admin_only=True)
+    except Exception:  # noqa: BLE001
+        log.exception("could not send a dashboard note to Telegram")
+
+
+def remote_ready() -> bool:
+    """The password-protected port is wanted and has a password to ask for."""
+    return config.DASHBOARD_REMOTE_ENABLED and dashboard_auth.has_password()
+
+
 def serve(bind: str = config.DASHBOARD_BIND, port: int = config.DASHBOARD_PORT) -> None:
     """Run until the process is stopped."""
     hub = Hub()
     handler = type("Handler", (_Handler,), {"hub": hub})
     server = ThreadingHTTPServer((bind, port), handler)
     threading.Thread(target=hub.run, name="dashboard-sampler", daemon=True).start()
+    if remote_ready():
+        guarded = type("RemoteHandler", (_Handler,), {"hub": hub, "remote": True, "sessions": dashboard_auth.Sessions()})
+        outside = ThreadingHTTPServer(("127.0.0.1", config.DASHBOARD_REMOTE_PORT), guarded)
+        threading.Thread(target=outside.serve_forever, name="dashboard-remote", daemon=True).start()
+        log.info("dashboard: password-protected port %d for the tunnel", config.DASHBOARD_REMOTE_PORT)
+    elif config.DASHBOARD_REMOTE_ENABLED:
+        log.warning("dashboard: DASHBOARD_REMOTE_ENABLED is on but no password is set; run dashboard_password.py")
     log.info("dashboard: http://%s:%d", bind, port)
     server.serve_forever()
 

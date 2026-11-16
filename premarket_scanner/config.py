@@ -115,6 +115,9 @@ PORTFOLIO_TO_GROUP: bool = _env_bool("PORTFOLIO_TO_GROUP", False)   # false = ow
 DASHBOARD_ENABLED: bool = _env_bool("DASHBOARD_ENABLED", True)
 DASHBOARD_BIND: str = _env_str("DASHBOARD_BIND", "127.0.0.1")   # local only: it shows the account
 DASHBOARD_PORT: int = _env_int("DASHBOARD_PORT", 8790)
+# Opening the dashboard from outside: a second port that always asks for the password, behind its own tunnel
+DASHBOARD_REMOTE_ENABLED: bool = _env_bool("DASHBOARD_REMOTE_ENABLED", False)
+DASHBOARD_REMOTE_PORT: int = _env_int("DASHBOARD_REMOTE_PORT", 8792)
 
 # EA bridge: Telegram "confirm" button -> order request file -> your Expert Advisor in MT5
 EA_BRIDGE_ENABLED: bool = _env_bool("EA_BRIDGE_ENABLED", True)

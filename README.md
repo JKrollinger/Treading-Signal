@@ -270,6 +270,16 @@ distance, or free margin is short. The switch is mirrored to `<MT5 Common>\Files
 and the EA rejects every request while it reads `1`, so the stop also holds for anything else that
 writes to `orders.csv`. After editing the EA, copy it to MT5's `MQL5\Experts` folder and compile.
 
+**From a phone or another PC.** Port 8790 never leaves this PC. With `DASHBOARD_REMOTE_ENABLED=true`
+the dashboard also listens on port 8792, where every page and every API call needs a signed-in
+session, and the scheduler opens a second Cloudflare quick tunnel to that port only. Set the
+password with `python dashboard_password.py` (at least 10 characters; only a salted hash is kept
+in `data/dashboard_auth.json`), restart the bot, and the link arrives in the owner chat. It changes
+at every restart. Sessions last 12 hours and end when the bot restarts; five wrong passwords lock
+the login for 15 minutes and you are told on Telegram. Without a password the port and the tunnel
+stay off. Anyone with the link and the password sees the account and can use the stop button, so
+keep both to yourself.
+
 Click a trade for its reasons and to write your own note. A new position's S/L is recorded from
 the moment the dashboard sees it: MT5's history only keeps the S/L set in the opening order.
 The previous plain layout is still at http://127.0.0.1:8790/classic. Animations stop when
