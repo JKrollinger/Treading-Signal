@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, dashboard_auth, ea_bridge, filters, mt5_source, risk_gate
+from . import config, dashboard_auth, decision_log, ea_bridge, filters, mt5_source, risk_gate
 from . import trade_journal as journal
 from .special import display_name
 
@@ -387,7 +387,7 @@ class Hub:
         mode = next((r["status"] for r in reversed(results) if r.get("status") in ("FILLED", "DRYRUN")), None)
         return {
             "ok": True, "halt": ea_bridge.halt_state(), "scheduler": _scheduler_status(), "settings": self.settings,
-            "risk": self.risk,
+            "risk": self.risk, "decisions": decision_log.read(),
             "ea": {"enabled": config.EA_BRIDGE_ENABLED, "folder_found": bool(folder and folder.exists()),
                    "heartbeat_age_s": heartbeat, "online": heartbeat is not None and heartbeat <= EA_ONLINE_S,
                    "last_mode": mode, "results": rows, "pending": pending},

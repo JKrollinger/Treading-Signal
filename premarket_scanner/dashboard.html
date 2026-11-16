@@ -298,6 +298,10 @@ td.tick-down{animation:flashDown .9s ease-out}
   <div class="strategy-grid" id="strategy-tiles"></div>
   <div class="panel bigpanel"><div class="panelhead"><h3>✦ เส้นทางคำสั่ง · สถานะตอนนี้</h3><span class="small">จากราคาตลาดถึง MT5</span></div><div class="flow" id="flow"></div>
     <p class="footnote">บอทไม่ส่งคำสั่งเอง: เมื่อมีสัญญาณ บอทส่งข้อความพร้อมปุ่มยืนยันใน Telegram ถ้าคุณกดยืนยัน บอทเขียนคำขอให้ EA (SignalBotBridge) ตรวจและส่งคำสั่งใน MT5 ถ้า EA อยู่ในโหมด DryRun จะตรวจอย่างเดียวไม่ส่ง</p></div>
+  <div class="panel bigpanel" id="why-panel"><div class="panelhead"><h3>❓ ทำไมตอนนี้มีหรือไม่มีสัญญาณ</h3><span class="small" id="why-note"></span></div>
+    <div class="grid2" style="margin-top:0" id="why-now"></div>
+    <div class="panelhead" style="margin:16px 0 6px"><h3>ลำดับการเปลี่ยนสถานะ</h3><span class="small">บันทึกเมื่อเหตุผลเปลี่ยน ไม่ใช่ทุกรอบตรวจ</span></div>
+    <div class="tablewrap" id="why-log"></div></div>
   <div class="panel bigpanel"><div class="panelhead"><h3>◉ สัญญาณที่บอทออก และเหตุผล</h3><span class="small">ทั้งที่ได้และเสีย · R คือผลเทียบกับระยะ S/L</span></div><div class="tablewrap" id="signals"></div></div>
   <div class="panel bigpanel"><div class="panelhead"><h3>⌁ สิ่งที่ EA ทำล่าสุด</h3><span class="small" id="ea-folder"></span></div><div id="ea-pending"></div><div class="tablewrap" id="ea-results"></div></div>
 </section>
@@ -958,6 +962,7 @@ function renderBots(){
       `<button class="btn secondary" disabled>${set.stocks_enabled ? 'เปิดอยู่' : 'เปิดได้ด้วย STOCKS_ENABLED=true'}</button>`),
   ].join(''));
   renderFlow();
+  renderWhy();
   renderSignals(sigs);
   renderEaActivity();
 }
@@ -976,6 +981,28 @@ function renderFlow(){
     node('MT5', !s.connected ? 'off' : s.algo_trading ? 'ok' : 'warn', !s.connected ? 'ปิดอยู่' : s.algo_trading ? 'Algo Trading เปิด' : 'Algo Trading ปิด'),
   ];
   setHTML($('#flow'), nodes.join('<i class="pipe" aria-hidden="true">→</i>'));
+}
+const WHY_STATE = {signal:'ok', tracking:'ok', already_today:'ok', held:'warn', stale:'warn', no_price:'off'};
+function renderWhy(){
+  const d = S.sys && S.sys.decisions;
+  if (!d) return;
+  $('#why-note').textContent = d.version || '';
+  const today = bkkDay(nowSec());
+  setHTML($('#why-now'), d.latest.length ? d.latest.map(r => {
+    const tally = r.day === today ? Object.entries(r.today || {}).sort((a, b) => b[1] - a[1]) : [];
+    const n = tally.reduce((a, x) => a + x[1], 0), age = nowSec() - ts(r.at);
+    return `<div><div class="srow-main"><b data-sym="${esc(r.symbol)}" style="cursor:pointer;font-size:13px">${esc(r.symbol)}</b>
+      <span class="state ${WHY_STATE[r.code] || 'off'}">${esc(d.labels[r.code] || r.code)}</span></div>
+      <div class="tipline" style="color:#e9e6df">${esc(r.reason)}</div>
+      <ul class="cond"><li>${mark(r.uptrend)}<span>แนวโน้มใหญ่ขาขึ้น (ปิดเมื่อวาน ${px(r.y_close)} · SMA200 ${px(r.sma200)})</span></li>
+      <li>${mark(r.above)}<span>ทะลุ High เมื่อวาน ${px(r.y_high)} (ราคา ${px(r.price)})</span></li>
+      <li>${mark(r.at_high)}<span>อยู่ที่ High ของวัน ${px(r.day_high)}</span></li></ul>
+      <div class="small" style="margin-top:6px">ตรวจล่าสุด ${when(r.at)}${age > 900 ? ' ⚠ นานกว่า 15 นาที' : ''} · เป็นแบบนี้ตั้งแต่ ${when(r.since)} · ราคาจาก ${esc(r.source || '-')}</div>
+      ${n ? `<div class="small" style="margin-top:3px">วันนี้ตรวจ ${n} รอบ: ${tally.map(([c, k]) => `${esc(d.labels[c] || c)} ${k}`).join(' · ')}</div>` : ''}</div>`;
+  }).join('') : '<div class="empty">ยังไม่มีบันทึก บอทจะเริ่มบันทึกในรอบตรวจถัดไป (ทุก 5 นาที)</div>');
+  setHTML($('#why-log'), d.changes.length ? `<table><thead><tr><th>เวลา</th><th>สัญลักษณ์</th><th>สถานะ</th><th>เหตุผล</th><th class="n">ราคา</th><th class="n">High เมื่อวาน</th><th class="n">SMA200</th></tr></thead><tbody>
+    ${d.changes.map(r => `<tr><td>${when(r.at, true)}</td><td>${esc(r.symbol)}</td><td><span class="state ${WHY_STATE[r.code] || 'off'}">${esc(d.labels[r.code] || r.code)}</span></td>
+      <td style="white-space:normal;min-width:280px">${esc(r.reason)}</td><td class="n">${px(r.price)}</td><td class="n">${px(r.y_high)}</td><td class="n">${px(r.sma200)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">ยังไม่มีการเปลี่ยนสถานะ</div>');
 }
 function renderSignals(rows){
   const el = $('#signals');

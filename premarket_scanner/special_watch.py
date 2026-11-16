@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, filters, special, trade_fmt
+from . import config, decision_log, filters, special, trade_fmt
 from .special import SpecialItem, fmt_price
 from .trade_fmt import BUY_BADGE, DOWN, EXIT
 
@@ -537,12 +537,15 @@ def run_watch(
         messages.append(text)
         kinds.append(kind)
     stamp = now.isoformat(timespec="seconds")
+    decisions: list[tuple] = []            # (item, code, reason): why each symbol did or did not signal
 
     for it in items:
         if it.price is None:
+            decisions.append((it, "no_price", "อ่านราคาของสัญลักษณ์นี้ไม่ได้"))
             continue
         if it.quote_time is None or now - it.quote_time > stale_after:
             log.debug("%s: quote is stale (market closed?), skipped", it.symbol)
+            decisions.append((it, "stale", f"ราคาล่าสุดเก่าเกิน {config.STALE_QUOTE_MIN} นาที (ตลาดปิด) จึงไม่ออกสัญญาณ"))
             continue
         price = float(it.price)
         rec = state.get(it.symbol)
@@ -550,7 +553,10 @@ def run_watch(
         if rec is None or rec.get("status") not in TRACKING:
             # nothing being followed: allow one new signal per symbol per day
             if rec is not None and rec.get("date") == today.isoformat():
+                decisions.append((it, "already_today", "วันนี้ออกสัญญาณของสัญลักษณ์นี้ไปแล้ว (วันละ 1 สัญญาณ)"))
                 continue
+            if not (it.signal and it.plan):
+                decisions.append((it, *decision_log.rule_decision(it)))
             if it.signal and it.plan:
                 reason = filters.check_new_signal(it.symbol, now.astimezone(timezone.utc))
                 if reason:
@@ -559,9 +565,12 @@ def run_watch(
                         state[key] = {"date": today.isoformat(), "reason": reason, "at": stamp, "symbol": it.symbol}
                         add("held", fmt_held(it, reason, thai))
                     log.info("%s: signal held back: %s", it.symbol, reason)
+                    decisions.append((it, "held", f"ครบ 3 เงื่อนไข แต่ตัวกรองให้รอ: {reason}"))
                     continue
                 rec = _record(it, now)
                 rec["no"] = next_signal_no(state_path)
+                rec["strategy_version"] = decision_log.strategy_version()
+                decisions.append((it, "signal", f"ครบ 3 เงื่อนไข ออกสัญญาณ #{rec['no']} ที่ราคา {rec['entry']}"))
                 state[it.symbol] = rec
                 add("new", fmt_new(rec, thai))
                 if config.EA_BRIDGE_ENABLED and it.source == "mt5":
@@ -571,6 +580,7 @@ def run_watch(
             continue
 
         # follow an open signal --------------------------------------------------
+        decisions.append((it, "tracking", f"กำลังติดตามสัญญาณ #{rec.get('no', '-')} ที่เปิดอยู่ จึงไม่ออกสัญญาณใหม่"))
         rec["last_price"], rec["updated_at"] = price, stamp
         rec["highest"] = max(float(rec["highest"]), price)
         new_trail = rec["highest"] - rec["trail_atr_mult"] * rec["atr"]
@@ -598,6 +608,7 @@ def run_watch(
 
     save_state(state, state_path)
     if state_path is None:
+        decision_log.record(decisions, now)
         export_chart_file(state, now)
     if state_path is None:
         try:

@@ -258,6 +258,13 @@ request for the EA: Telegram's confirm button and `/test` are refused until you 
 Open positions are not closed, and trades you place by hand in MT5 are not affected. The state
 is kept in `data/trading_halt.json`, so it survives a restart.
 
+**Why there is (no) signal.** Every Scanner C check stores its verdict per symbol in
+`data/signal_decisions_latest.json` (the reason, since when, and today's count per reason) and adds
+a line to `data/signal_decisions.jsonl` whenever the reason changes: market closed, below the
+200-day average, no breakout yet, off the day's high, held by the time/news filter, signal issued,
+or already following one. The Bot page shows both. New signals also carry `strategy_version`,
+the rule set and settings they were issued under.
+
 **Risk gate.** `premarket_scanner/risk_gate.py` can only block requests, never create one. While
 MT5 is open it measures the account every 3 seconds: when the loss of the day (closed plus
 floating) reaches `RISK_DAILY_LOSS_PCT` (2%) or equity falls `RISK_MAX_DRAWDOWN_PCT` (8%) from
