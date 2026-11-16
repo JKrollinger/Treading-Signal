@@ -707,6 +707,7 @@ overwrites that day's file.
 | `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
 | `EA_BRIDGE_ENABLED` | `true` | Confirm button on MT5-quoted signals; order requests written for the EA. |
 | `EA_FILES_DIR` | empty | Override the request/result folder (default `<MT5 Common>\Files\signalbot`). |
+| `GO_LIVE_MIN_TRADES`, `GO_LIVE_MIN_WEEKS`, `GO_LIVE_MIN_AVG_R`, `GO_LIVE_MIN_PF`, `GO_LIVE_MAX_DD_R`, `GO_LIVE_MAX_LOSS_STREAK`, `GO_LIVE_MIN_EA_TRADES` | `30`, `8`, `0.10`, `1.2`, `10`, `8`, `10` | Demo-to-real checklist on the dashboard's risk page: closed Trend-join signals, weeks running, average R, profit factor, deepest drawdown in R, longest losing run, EA-filled signals. It only reports (`premarket_scanner/readiness.py`). |
 | `EA_RISK_PCT` | `1.0` | Percent of balance risked to the stop when sizing a request. |
 | `EA_TP_R` | `1.0` | Take-profit written to the request, in R (0 = none; the bot still trails). |
 | `EA_REQUEST_MAX_AGE_MIN` | `15` | Informational; the EA's `InpMaxAgeMinutes` enforces it. |
@@ -723,7 +724,8 @@ overwrites that day's file.
 | `ATR_PERIOD` | `14` | Days in the average true range used for the stop. |
 | `STOP_ATR_MULT` | `1.0` | Initial stop = entry - this x ATR. |
 | `PARTIAL_R` | `1.0` | Take half the position at this many R. |
-| `TRAIL_ATR_MULT` | `3.0` | Trailing stop distance below the highest price, in ATR. |
+| `TRAIL_ATR_MULT` | `2.0` | Trailing stop distance below the highest price, in ATR. |
+| `ADX_MIN` | `20` | A new signal needs yesterday's daily ADX(14) at or above this (0 = off). With the 2 ATR trail it won 64% against 52% on 10 years of gold (`backtest_gold.py --source mt5 --days 3650`). |
 | `MAX_HOLD_DAYS` | `10` | Close what is left after this many trading days. |
 | `TRAIL_NOTIFY_ATR` | `0.5` | Alert when the trailing stop rises by this many ATR. |
 | `TARGET_R_MULT` | `2.0` | Fixed target used only by the v1 backtest. |
@@ -807,3 +809,14 @@ premarket_scanner/filters.py      session / Friday / news filters shared by live
 premarket_scanner/backtest.py     backtest engine and reports
 output/                 daily JSON files (premarket_scan_<date>.json, trend_join_<date>.json)
 ```
+
+## Research scripts
+
+Each compares a change with the live Trend-join rules on hourly history and writes JSON to `output/`.
+None of them changes what the bot does.
+
+| Script | Question | Result (November 2026) |
+|---|---|---|
+| `backtest_squeeze.py` | Enter only after an NR7 / Inside Day, or only with room below resistance? | No reliable gain; not adopted. |
+| `backtest_pullback.py` | Buy the pullback to the daily EMA20 instead of the breakout? | MT5 and Yahoo disagree; not adopted. |
+| `backtest_gold.py` | Gold only: what raises the win rate, and does the short side pay? | See the table it prints; `--source mt5 --days 3650` uses about 10 years. |

@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from . import config, tradingview, yahoo
+from . import config, filters, tradingview, yahoo
 
 log = logging.getLogger(__name__)
 
@@ -146,12 +146,14 @@ class SpecialItem:
     yesterday_close: float | None = None
     sma200: float | None = None
     atr: float | None = None
+    adx: float | None = None             # daily ADX(14) as of yesterday (None = the source has none)
     currency: str = ""
     quote_time: datetime | None = None
     source: str = ""
     above_yesterday_high: bool | None = None
     at_high_of_day: bool | None = None
     uptrend: bool | None = None          # yesterday's close above the 200-day average
+    trend_strong: bool | None = None     # ADX at or above config.ADX_MIN (True when the filter is off)
     signal: bool = False                 # all three of the above
     plan: TradePlan | None = None
 
@@ -226,7 +228,7 @@ def _fill_from_mt5(items: dict[str, SpecialItem]) -> list[str]:
         it.yesterday_high, it.yesterday_low = r.get("yesterday_high"), r.get("yesterday_low")
         it.yesterday_close = r.get("yesterday_close")
         it.previous_close = it.yesterday_close
-        it.sma200, it.atr = r.get("sma200"), r.get("atr")
+        it.sma200, it.atr, it.adx = r.get("sma200"), r.get("atr"), r.get("adx")
         it.currency = r.get("currency") or ""
         it.quote_time = r.get("quote_time")
         it.source = "mt5"
@@ -265,6 +267,7 @@ def _compute_levels(symbols: list[str], today: date) -> dict[str, dict]:
         ]
         n = config.ATR_PERIOD
         row["atr"] = sum(trs[-n:]) / n if len(trs) >= n else None
+        row["adx"] = filters.daily_adx([b[1] for b in bars], [b[2] for b in bars], closes)
         out[s] = row
     return out
 
@@ -317,6 +320,7 @@ def _fill_from_yahoo(items: dict[str, SpecialItem], today: date) -> None:
         it.yesterday_close = row.get("yesterday_close")
         it.sma200 = row.get("sma200")
         it.atr = row.get("atr")
+        it.adx = row.get("adx")
 
 
 # Snapshot + evaluation --------------------------------------------------------------
@@ -375,7 +379,11 @@ def fetch_special(symbols: list[str] | None = None, thai: bool = True) -> list[S
             it.at_high_of_day = p >= it.day_high * (1.0 - config.HOD_TOLERANCE_PCT / 100.0)
         if it.yesterday_close is not None and it.sma200 is not None:
             it.uptrend = it.yesterday_close > it.sma200
-        it.signal = bool(it.above_yesterday_high and it.at_high_of_day and it.uptrend)
+        if config.ADX_MIN <= 0:
+            it.trend_strong = True
+        elif it.adx is not None:
+            it.trend_strong = it.adx >= config.ADX_MIN
+        it.signal = bool(it.above_yesterday_high and it.at_high_of_day and it.uptrend and it.trend_strong)
         if p is not None:
             it.plan = build_plan(p, it.atr, it.yesterday_high)
     return [items[s] for s in symbols]

@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, dashboard_auth, decision_log, ea_bridge, filters, mt5_source, risk_gate
+from . import config, dashboard_auth, decision_log, ea_bridge, readiness, filters, mt5_source, risk_gate
 from . import trade_journal as journal
 from .special import display_name
 
@@ -358,6 +358,15 @@ class Hub:
         appdata = os.environ.get("APPDATA")      # MT5 closed: its default Common folder
         return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / ea_bridge.SUBDIR if appdata else None
 
+    def _readiness(self) -> dict | None:
+        try:
+            with self.lock:
+                doc = self.doc
+            return readiness.evaluate(doc, self.risk)
+        except Exception:  # noqa: BLE001 - a checklist must not take the page down
+            log.exception("readiness check failed")
+            return None
+
     def system(self) -> dict:
         """The EA bridge, the stop switch, the scheduler and the bot's settings."""
         folder = self._ea_folder()
@@ -387,7 +396,7 @@ class Hub:
         mode = next((r["status"] for r in reversed(results) if r.get("status") in ("FILLED", "DRYRUN")), None)
         return {
             "ok": True, "halt": ea_bridge.halt_state(), "scheduler": _scheduler_status(), "settings": self.settings,
-            "risk": self.risk, "decisions": decision_log.read(),
+            "risk": self.risk, "decisions": decision_log.read(), "readiness": self._readiness(),
             "ea": {"enabled": config.EA_BRIDGE_ENABLED, "folder_found": bool(folder and folder.exists()),
                    "heartbeat_age_s": heartbeat, "online": heartbeat is not None and heartbeat <= EA_ONLINE_S,
                    "last_mode": mode, "results": rows, "pending": pending},
@@ -459,7 +468,7 @@ def _settings() -> dict:
     return {
         "watchlist": list(c.SPECIAL_WATCHLIST), "watch_enabled": bool(c.SPECIAL_ENABLED and c.SPECIAL_WATCH_ENABLED),
         "watch_every_min": c.SPECIAL_WATCH_INTERVAL_MIN, "source": c.SPECIAL_DATA_SOURCE,
-        "stop_atr": c.STOP_ATR_MULT, "partial_r": c.PARTIAL_R, "trail_atr": c.TRAIL_ATR_MULT, "max_hold_days": c.MAX_HOLD_DAYS,
+        "stop_atr": c.STOP_ATR_MULT, "partial_r": c.PARTIAL_R, "trail_atr": c.TRAIL_ATR_MULT, "adx_min": c.ADX_MIN, "max_hold_days": c.MAX_HOLD_DAYS,
         "stale_min": c.STALE_QUOTE_MIN, "filter_symbols": list(c.TIME_FILTER_SYMBOLS),
         "session_utc": [c.SESSION_UTC_START, c.SESSION_UTC_END], "friday_cutoff_utc": c.FRIDAY_CUTOFF_UTC,
         "news_blackout_min": c.NEWS_BLACKOUT_MIN, "daytrade_enabled": c.DAYTRADE_ENABLED,

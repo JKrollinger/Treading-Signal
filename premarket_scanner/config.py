@@ -131,6 +131,14 @@ RISK_GATE_ENABLED: bool = _env_bool("RISK_GATE_ENABLED", True)
 RISK_DAILY_LOSS_PCT: float = _env_float("RISK_DAILY_LOSS_PCT", 2.0)       # loss of the day (closed + floating), 0 = off
 RISK_MAX_DRAWDOWN_PCT: float = _env_float("RISK_MAX_DRAWDOWN_PCT", 8.0)   # from the equity high-water mark, 0 = off
 RISK_MAX_SPREAD_PCT: float = _env_float("RISK_MAX_SPREAD_PCT", 10.0)      # spread as % of the stop distance, 0 = off
+# Demo-to-real checklist on the dashboard (premarket_scanner/readiness.py). It only reports.
+GO_LIVE_MIN_TRADES: int = _env_int("GO_LIVE_MIN_TRADES", 30)          # closed Trend-join signals
+GO_LIVE_MIN_WEEKS: int = _env_int("GO_LIVE_MIN_WEEKS", 8)             # since the first signal
+GO_LIVE_MIN_AVG_R: float = _env_float("GO_LIVE_MIN_AVG_R", 0.10)      # average result per signal
+GO_LIVE_MIN_PF: float = _env_float("GO_LIVE_MIN_PF", 1.2)             # profit factor
+GO_LIVE_MAX_DD_R: float = _env_float("GO_LIVE_MAX_DD_R", 10.0)        # deepest run of losses, in R
+GO_LIVE_MAX_LOSS_STREAK: int = _env_int("GO_LIVE_MAX_LOSS_STREAK", 8)
+GO_LIVE_MIN_EA_TRADES: int = _env_int("GO_LIVE_MIN_EA_TRADES", 10)    # confirmed signals the EA filled
 TELEGRAM_COMMANDS_ENABLED: bool = _env_bool("TELEGRAM_COMMANDS_ENABLED", True)   # buttons + /status /orders
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
@@ -156,7 +164,10 @@ TARGET_R_MULT: float = _env_float("TARGET_R_MULT", 2.0)   # fixed target used by
 # Live exit (v2-trail): half off at PARTIAL_R, the rest trails TRAIL_ATR_MULT x ATR below the
 # highest price since entry (the stop only ever rises), closed after MAX_HOLD_DAYS trading days
 PARTIAL_R: float = _env_float("PARTIAL_R", 1.0)
-TRAIL_ATR_MULT: float = _env_float("TRAIL_ATR_MULT", 3.0)
+TRAIL_ATR_MULT: float = _env_float("TRAIL_ATR_MULT", 2.0)
+# Trend strength: a new signal needs yesterday's daily ADX(14) at or above this (0 = off). On 10 years
+# of gold, 2 ATR trail + ADX >= 20 won 64% against 52% with a better average result (backtest_gold.py)
+ADX_MIN: float = _env_float("ADX_MIN", 20.0)
 MAX_HOLD_DAYS: int = _env_int("MAX_HOLD_DAYS", 10)
 TRAIL_NOTIFY_ATR: float = _env_float("TRAIL_NOTIFY_ATR", 0.5)   # alert when the stop rises this many ATR
 STALE_QUOTE_MIN: int = _env_int("STALE_QUOTE_MIN", 30)    # ignore quotes older than this (market closed)

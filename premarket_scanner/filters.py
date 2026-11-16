@@ -36,6 +36,26 @@ _cal_lock = threading.Lock()
 _cal_cache: tuple[float, list[dict]] | None = None
 
 
+def daily_adx(high, low, close, n: int = 14) -> float | None:
+    """Wilder's ADX of completed daily bars (the same formula as the backtest), or None if too short."""
+    import pandas as pd
+
+    high, low, close = (pd.Series(list(x), dtype=float) for x in (high, low, close))
+    if len(close) < 3 * n:
+        return None
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    up, down = high.diff(), -low.diff()
+    plus = up.where((up > down) & (up > 0), 0.0)
+    minus = down.where((down > up) & (down > 0), 0.0)
+    smooth = lambda x: x.ewm(alpha=1.0 / n, adjust=False).mean()  # noqa: E731
+    atr = smooth(tr)
+    plus_di, minus_di = 100 * smooth(plus) / atr, 100 * smooth(minus) / atr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    value = smooth(dx.fillna(0.0)).iloc[-1]
+    return None if pd.isna(value) else float(value)
+
+
 def applies_to(symbol: str) -> bool:
     from .special import base_symbol
 

@@ -565,12 +565,12 @@ def run_watch(
                         state[key] = {"date": today.isoformat(), "reason": reason, "at": stamp, "symbol": it.symbol}
                         add("held", fmt_held(it, reason, thai))
                     log.info("%s: signal held back: %s", it.symbol, reason)
-                    decisions.append((it, "held", f"ครบ 3 เงื่อนไข แต่ตัวกรองให้รอ: {reason}"))
+                    decisions.append((it, "held", f"ครบทุกเงื่อนไข แต่ตัวกรองให้รอ: {reason}"))
                     continue
                 rec = _record(it, now)
                 rec["no"] = next_signal_no(state_path)
                 rec["strategy_version"] = decision_log.strategy_version()
-                decisions.append((it, "signal", f"ครบ 3 เงื่อนไข ออกสัญญาณ #{rec['no']} ที่ราคา {rec['entry']}"))
+                decisions.append((it, "signal", f"ครบทุกเงื่อนไข ออกสัญญาณ #{rec['no']} ที่ราคา {rec['entry']}"))
                 state[it.symbol] = rec
                 add("new", fmt_new(rec, thai))
                 if config.EA_BRIDGE_ENABLED and it.source == "mt5":

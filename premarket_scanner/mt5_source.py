@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import config
+from . import config, filters
 
 log = logging.getLogger(__name__)
 
@@ -228,6 +228,7 @@ def fetch_rows(symbols: list[str]) -> dict[str, dict]:
             "yesterday_close": float(yday["close"]),
             "sma200": sma200,
             "atr": atr,
+            "adx": filters.daily_adx(hist["high"], hist["low"], hist["close"]),
             "currency": getattr(info, "currency_profit", "") or "",
             "digits": getattr(info, "digits", None),
             "spread_points": getattr(info, "spread", None),

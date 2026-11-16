@@ -351,6 +351,11 @@ td.tick-down{animation:flashDown .9s ease-out}
   <div class="panel bigpanel"><div class="panelhead"><h3>⛨ ด่านตรวจความเสี่ยงอัตโนมัติ</h3><span class="small" id="gate-note"></span></div>
     <div class="grid2" style="margin-top:0" id="gate"></div>
     <p class="footnote" style="margin-top:10px">เมื่อถึงเพดาน ระบบจะกดปุ่มหยุดให้เองและแจ้งทาง Telegram · เพดานรายวันทำงานวันละครั้ง ถ้าคุณกดเปิดเองแล้วจะไม่หยุดซ้ำจนถึงวันถัดไป · เพดานถอยจากจุดสูงสุดจะเริ่มวัดใหม่จากมูลค่าพอร์ต ณ ตอนที่คุณกดเปิด · ก่อนส่งทุกรายการยังตรวจ สเปรด มาร์จิ้น สถานะ EA และ Algo Trading</p></div>
+  <div class="panel bigpanel" id="ready-panel"><div class="panelhead"><h3>◎ เกณฑ์ผ่านจากเดโมไปเงินจริง</h3><span class="state" id="ready-state"></span></div>
+    <p id="ready-text" style="margin:0 0 4px;color:#e9e6df;font-size:13px"></p>
+    <div class="thin-track" style="margin:8px 0 12px"><i id="ready-bar" style="width:0"></i></div>
+    <div class="tablewrap" id="ready-list"></div>
+    <p class="footnote" style="margin-top:10px">วัดจากสัญญาณ Trend-join ที่ปิดแล้วของบอท (ผลเป็น R ตามกฎออกเดียวกับที่ประกาศ) สมุดบันทึกของบัญชี MT5 และด่านตรวจความเสี่ยง · เกณฑ์ตั้งต่ำกว่าผลทดสอบย้อนหลังเล็กน้อยแต่สูงกว่าเท่าทุน ปรับได้ด้วย GO_LIVE_* ใน .env · ระบบรายงานอย่างเดียว ไม่สลับบัญชีและไม่เปลี่ยนการตั้งค่าเอง ผลในเดโมไม่รับประกันผลในบัญชีจริง</p></div>
   <div class="panel bigpanel emergency" id="emergency"><img class="shield" src="/static/kill-shield.webp" alt="" width="96" height="96"><div style="flex:1"><div class="eyebrow">EMERGENCY EXECUTION PROTECTION</div><h3>ปุ่มหยุดฉุกเฉิน (Kill Switch)</h3>
     <p>หยุดไม่ให้บอทเขียนคำขอเปิดไม้ใหม่ให้ EA ทุกช่องทาง (ปุ่มยืนยันใน Telegram และ /test จะถูกปฏิเสธ) · ไม้ที่เปิดอยู่ไม่ถูกปิด และไม้ที่คุณเปิดเองใน MT5 ไม่ได้รับผลกระทบ</p>
     <p id="halt-state" style="color:#f4e4cb"></p></div>
@@ -982,7 +987,7 @@ function renderFlow(){
   ];
   setHTML($('#flow'), nodes.join('<i class="pipe" aria-hidden="true">→</i>'));
 }
-const WHY_STATE = {signal:'ok', tracking:'ok', already_today:'ok', held:'warn', stale:'warn', no_price:'off'};
+const WHY_STATE = {signal:'ok', tracking:'ok', already_today:'ok', held:'warn', weak_trend:'warn', stale:'warn', no_price:'off'};
 function renderWhy(){
   const d = S.sys && S.sys.decisions;
   if (!d) return;
@@ -995,6 +1000,7 @@ function renderWhy(){
       <span class="state ${WHY_STATE[r.code] || 'off'}">${esc(d.labels[r.code] || r.code)}</span></div>
       <div class="tipline" style="color:#e9e6df">${esc(r.reason)}</div>
       <ul class="cond"><li>${mark(r.uptrend)}<span>แนวโน้มใหญ่ขาขึ้น (ปิดเมื่อวาน ${px(r.y_close)} · SMA200 ${px(r.sma200)})</span></li>
+      ${r.adx_min > 0 ? `<li>${mark(r.strong)}<span>แนวโน้มแรงพอ: ADX รายวัน ${r.adx == null ? '-' : num(r.adx, 1)} (ต้อง ≥ ${num(r.adx_min, 0)})</span></li>` : ''}
       <li>${mark(r.above)}<span>ทะลุ High เมื่อวาน ${px(r.y_high)} (ราคา ${px(r.price)})</span></li>
       <li>${mark(r.at_high)}<span>อยู่ที่ High ของวัน ${px(r.day_high)}</span></li></ul>
       <div class="small" style="margin-top:6px">ตรวจล่าสุด ${when(r.at)}${age > 900 ? ' ⚠ นานกว่า 15 นาที' : ''} · เป็นแบบนี้ตั้งแต่ ${when(r.since)} · ราคาจาก ${esc(r.source || '-')}</div>
@@ -1162,6 +1168,20 @@ function renderRisk(){
   ].join(''));
   renderHalt();
 }
+const READY = {collecting:['warn', '◔ กำลังเก็บข้อมูล'], review:['off', '✕ ควรหยุดทบทวน'], passed:['ok', '✓ ผ่านทุกข้อ']};
+function renderReady(){
+  const r = S.sys && S.sys.readiness;
+  if (!r){ setHTML($('#ready-list'), '<div class="empty">ยังอ่านข้อมูลไม่ได้</div>'); return; }
+  const st = READY[r.status] || READY.collecting, badge = $('#ready-state');
+  badge.className = 'state ' + st[0];
+  badge.textContent = `${st[1]} · ${r.met}/${r.total}`;
+  $('#ready-text').textContent = r.text + (r.account_mode && r.account_mode !== 'demo' ? ' · ⚠ บัญชีที่ล็อกอินอยู่ไม่ใช่เดโม' : '');
+  $('#ready-bar').style.width = (r.total ? r.met / r.total * 100 : 0) + '%';
+  const mark3 = ok => ok === true ? '<span class="state ok">✓ ผ่าน</span>' : ok === false ? '<span class="state off">✕ ยังไม่ผ่าน</span>' : '<span class="state warn">… รอข้อมูล</span>';
+  setHTML($('#ready-list'), `<table><thead><tr><th>เกณฑ์</th><th>ตอนนี้</th><th>ต้องได้</th><th>ผล</th><th>เหตุผล</th></tr></thead><tbody>
+    ${r.checks.map(c => `<tr><td>${esc(c.label)}</td><td><b>${esc(c.value)}</b>${c.progress != null && c.progress < 1 ? `<div class="thin-track" style="margin-top:5px;min-width:90px"><i style="width:${c.progress * 100}%"></i></div>` : ''}</td>
+      <td>${esc(c.target)}</td><td>${mark3(c.ok)}</td><td style="white-space:normal;min-width:240px;color:#a9a59c">${esc(c.why)}</td></tr>`).join('')}</tbody></table>`);
+}
 const HALT_BY = {dashboard:'กดจากแดชบอร์ด', 'risk:daily_loss':'ด่านตรวจความเสี่ยง: ขาดทุนรายวัน', 'risk:drawdown':'ด่านตรวจความเสี่ยง: ถอยจากจุดสูงสุด'};
 function renderGate(){
   const g = S.sys && S.sys.risk, host = $('#gate');
@@ -1185,6 +1205,7 @@ function renderGate(){
 }
 function renderHalt(){
   renderGate();
+  renderReady();
   const on = halted(), h = S.sys ? S.sys.halt : {};
   for (const id of ['#halt-top', '#halt-big']){
     const b = $(id);
