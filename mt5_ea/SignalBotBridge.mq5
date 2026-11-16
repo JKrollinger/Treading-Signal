@@ -35,6 +35,7 @@ string g_orders    = "signalbot\\orders.csv";
 string g_results   = "signalbot\\results.csv";
 string g_processed = "signalbot\\processed.txt";
 string g_heartbeat = "signalbot\\heartbeat.txt";
+string g_halt      = "signalbot\\halt.txt";      // "1" = the bot's stop switch is on
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -134,6 +135,21 @@ void ProcessOrders()
    FileClose(h);
   }
 
+//+------------------------------------------------------------------+
+//| Stop switch: the bot writes "1" to halt.txt while new orders are   |
+//| stopped (dashboard button or a risk limit). No file = not stopped. |
+//+------------------------------------------------------------------+
+bool IsHalted()
+  {
+   if(!FileIsExist(g_halt, FILE_COMMON)) return(false);
+   int h = FileOpen(g_halt, FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return(true);               // unreadable: refuse rather than guess
+   string line = FileReadString(h);
+   FileClose(h);
+   StringTrimRight(line); StringTrimLeft(line);
+   return(line == "1");
+  }
+
 bool HasPosition(string symbol)
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -148,6 +164,8 @@ bool HasPosition(string symbol)
 void HandleRequest(string id, string createdUtc, string symbol, string side,
                    double lots, double sl, double tp, double entryRef)
   {
+   if(IsHalted())
+     { WriteResult(id, "REJECTED", 0, 0, lots, "stopped by the bot's stop switch"); return; }
    datetime created = StringToTime(createdUtc);          // "YYYY.MM.DD HH:MM:SS" written as UTC
    if(created > 0 && TimeGMT() - created > InpMaxAgeMinutes * 60)
      { WriteResult(id, "EXPIRED", 0, 0, lots, "request older than " + IntegerToString(InpMaxAgeMinutes) + " min"); return; }

@@ -228,25 +228,54 @@ drag it from Navigator > Expert Advisors onto any chart > tick "Allow Algo Tradi
 the AutoTrading toolbar button. Keep `InpDryRun = true` until a `/test` request comes back
 as `DRYRUN` in Telegram and you have reviewed the plan it prints.
 
-## Live dashboard and trade journal (read-only)
+## Live dashboard ("Gold Terminal") and trade journal
 
 The scheduler also starts a local web page at **http://127.0.0.1:8790**, fed by the MT5
-terminal about once a second. It reads the account and never sends anything to the broker.
-It only listens on this PC (it shows account figures) and is not behind the tunnel.
+terminal about once a second, in the Gold Terminal Pro design (dark gold, five pages in a
+sidebar). It reads the account and never sends anything to the broker. It only listens on this
+PC (it shows account figures) and is not behind the tunnel.
 
-- **Live overview:** balance, equity, floating and realised P/L, open positions with their S/L
-  and T/P, and a candle chart from the broker's own bars with every entry and exit marked, the
-  bot's signals, yesterday's high/low and the 200-day average.
-- **P/L journal:** every closed position from the deal history, kept in
-  `data/journal_<login>.json` (one file per account), with the cumulative curve and daily P/L.
-- **Entry and exit analysis:** each trade is checked against the Trend-join rules as they stood
-  at that moment, then against what price did during and after it (MFE, MAE, how much was kept).
+- **Dashboard:** live price with a bull or bear banner that follows the 200-day trend, a
+  scrolling ticker, world market sessions, KPI cards (total, today, week, month, win rate,
+  profit factor, max drawdown), a candle chart from the broker's own bars with every entry and
+  exit marked, the bot's signals, yesterday's high/low and the 200-day average, the balance
+  curve, monthly results, open positions, recent trades and the execution status.
+- **Accounts:** every MT5 login the dashboard has synced, each with its own journal in
+  `data/journal_<login>.json`.
+- **Bot (EA):** the strategies the bot runs with their settings and results, the live path
+  from price to MT5 (feed, strategy, filters, Telegram confirm, EA heartbeat, Algo Trading),
+  every signal with its reasons and outcome, and what the EA did with each request.
+- **Journal:** every closed position with P/L per trade, win/loss split and CSV export, plus the
+  entry and exit analysis: each trade is checked against the Trend-join rules as they stood at
+  that moment, then against what price did during and after it (MFE, MAE, how much was kept).
   The results add up to what costs money, risky habits and what works. EA system tests are left
-  out of this page. Below about 30 trades the statistics are only a hint.
-- **Bot signals:** every signal the bot issued, why, and how it ended.
+  out of the analysis. Below about 30 trades the statistics are only a hint.
+- **Risk:** money at risk if every open position hits its S/L, margin in use, drawdown from the
+  peak, the bot's safety rules, and the **stop button**.
+
+The stop button (top right, and on the Risk page) stops the bot from writing any new order
+request for the EA: Telegram's confirm button and `/test` are refused until you press it again.
+Open positions are not closed, and trades you place by hand in MT5 are not affected. The state
+is kept in `data/trading_halt.json`, so it survives a restart.
+
+**Risk gate.** `premarket_scanner/risk_gate.py` can only block requests, never create one. While
+MT5 is open it measures the account every 3 seconds: when the loss of the day (closed plus
+floating) reaches `RISK_DAILY_LOSS_PCT` (2%) or equity falls `RISK_MAX_DRAWDOWN_PCT` (8%) from
+its highest value, it switches the stop on by itself and tells you on Telegram. The daily stop
+fires once per Bangkok day: if you switch trading back on, it stays on until tomorrow. After a
+drawdown stop, measuring restarts from the equity at the moment you switch back on. Before every
+confirmed request it also refuses when MT5 is not connected to the broker, Algo Trading is off,
+the EA's heartbeat is older than 60 s, the spread is wider than `RISK_MAX_SPREAD_PCT` of the stop
+distance, or free margin is short. The switch is mirrored to `<MT5 Common>\Files\signalbot\halt.txt`
+and the EA rejects every request while it reads `1`, so the stop also holds for anything else that
+writes to `orders.csv`. After editing the EA, copy it to MT5's `MQL5\Experts` folder and compile.
 
 Click a trade for its reasons and to write your own note. A new position's S/L is recorded from
 the moment the dashboard sees it: MT5's history only keeps the S/L set in the opening order.
+The previous plain layout is still at http://127.0.0.1:8790/classic. Animations stop when
+Windows is set to reduce motion. The artwork in `premarket_scanner/static/` (bear, bot,
+shield, strategy emblems) was generated for this page; the bull and gold bars come with the
+design.
 
 It follows whichever account is logged in to MT5. It never starts MT5 when `MT5_AUTOSTART=false`;
 while MT5 is closed the journal stays readable and the live parts wait. Run it alone with
@@ -752,7 +781,7 @@ backtest_trend_join.py  replay the Trend-join Long rules on hourly history (Yaho
 premarket_scanner/tunnel.py       Cloudflare quick tunnel supervisor used by the scheduler
 premarket_scanner/mt5_source.py   MetaTrader 5 prices, levels and hourly history (read-only)
 premarket_scanner/trade_journal.py   closed-trade journal, entry/exit analysis and statistics
-premarket_scanner/dashboard.py    live dashboard server; dashboard.html is the page
+premarket_scanner/dashboard.py    live dashboard server; dashboard.html is the page (static/ holds its design and art)
 premarket_scanner/mt5_portfolio.py account snapshot + position opened/closed alerts (read-only)
 premarket_scanner/ea_bridge.py    order request / result files for the EA, risk-based lot sizing
 premarket_scanner/telegram_commands.py  owner-only buttons and /commands (long polling)

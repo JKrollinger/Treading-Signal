@@ -46,23 +46,76 @@ def files_dir() -> Path | None:
     return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / SUBDIR if appdata else None
 
 
-def orders_file() -> Path | None:
-    d = files_dir()
+def orders_file(folder: Path | None = None) -> Path | None:
+    d = folder or files_dir()
     return d / "orders.csv" if d else None
 
 
-def results_file() -> Path | None:
-    d = files_dir()
+def results_file(folder: Path | None = None) -> Path | None:
+    d = folder or files_dir()
     return d / "results.csv" if d else None
 
 
-def heartbeat_file() -> Path | None:
-    d = files_dir()
+def heartbeat_file(folder: Path | None = None) -> Path | None:
+    d = folder or files_dir()
     return d / "heartbeat.txt" if d else None
 
 
 def state_file() -> Path:
     return config.DATA_DIR / "ea_bridge_state.json"
+
+
+# Kill switch ----------------------------------------------------------------------------
+def halt_file() -> Path:
+    return config.DATA_DIR / "trading_halt.json"
+
+
+def halt_state() -> dict:
+    """{"halted": bool, "since": iso, "by": who}. Set from the dashboard's stop button."""
+    try:
+        data = json.loads(halt_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"halted": False}
+    return data if isinstance(data, dict) else {"halted": False}
+
+
+def mirror_halt(folder: Path | None = None) -> None:
+    """Copy the switch to <EA folder>\\halt.txt ("1" or "0") so the EA refuses requests too."""
+    d = folder or files_dir()
+    if d is None:
+        return
+    want = "1" if halt_state().get("halted") else "0"
+    path = d / "halt.txt"
+    try:
+        if path.exists() and path.read_text(encoding="ascii", errors="replace").strip() == want:
+            return
+        d.mkdir(parents=True, exist_ok=True)
+        path.write_text(want + "\n", encoding="ascii")
+    except OSError as exc:
+        log.warning("could not write %s: %s", path, exc)
+
+
+def set_halt(on: bool, by: str, reason: str = "", folder: Path | None = None) -> dict:
+    """Stop (or allow again) every new order request. Open positions are left alone."""
+    state = {"halted": bool(on), "since": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": by, "reason": reason}
+    path = halt_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    os.replace(tmp, path)
+    log.warning("new order requests %s by %s %s", "HALTED" if on else "allowed again", by, reason)
+    mirror_halt(folder)
+    return state
+
+
+def halt_message_th() -> str | None:
+    """Why a request was refused while the kill switch is on, or None when it is off."""
+    state = halt_state()
+    if not state.get("halted"):
+        return None
+    why = f" สาเหตุ: {state['reason']}" if state.get("reason") else ""
+    return ("⏸ ระบบหยุดส่งคำสั่งใหม่อยู่ จึงไม่ได้ส่งรายการให้ EA" + why +
+            " (เปิดอีกครั้งได้ที่แดชบอร์ด หน้า บริหารความเสี่ยง)")
 
 
 # Sizing (read-only) --------------------------------------------------------------------
@@ -142,6 +195,8 @@ def compute_lots(symbol: str, entry: float, stop: float, risk_pct: float | None 
 # Requests ---------------------------------------------------------------------------
 def write_order_request(symbol: str, side: str, lots: float, sl: float, tp: float, entry_ref: float,
                         comment: str = "signalbot") -> dict:
+    if halt_state().get("halted"):
+        raise RuntimeError("new order requests are halted (dashboard stop button)")
     path = orders_file()
     if path is None:
         raise RuntimeError("MT5 Common Files folder unknown; set EA_FILES_DIR")
@@ -163,16 +218,16 @@ def write_order_request(symbol: str, side: str, lots: float, sl: float, tp: floa
     return row
 
 
-def list_requests() -> list[dict]:
-    path = orders_file()
+def list_requests(folder: Path | None = None) -> list[dict]:
+    path = orders_file(folder)
     if path is None or not path.exists():
         return []
     with path.open("r", encoding="ascii", errors="replace", newline="") as fh:
         return [r for r in csv.DictReader(fh) if r.get("id")]
 
 
-def list_results() -> list[dict]:
-    path = results_file()
+def list_results(folder: Path | None = None) -> list[dict]:
+    path = results_file(folder)
     if path is None or not path.exists():
         return []
     out = []
@@ -206,8 +261,8 @@ def read_new_results() -> list[dict]:
     return fresh
 
 
-def heartbeat_age_seconds() -> float | None:
-    path = heartbeat_file()
+def heartbeat_age_seconds(folder: Path | None = None) -> float | None:
+    path = heartbeat_file(folder)
     if path is None or not path.exists():
         return None
     return max(0.0, datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)

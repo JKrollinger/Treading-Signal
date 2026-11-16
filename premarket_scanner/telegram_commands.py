@@ -91,6 +91,8 @@ def send_menu() -> bool:
 def confirm_trade(symbol: str) -> str:
     from . import special, special_watch
 
+    if halted := ea_bridge.halt_message_th():
+        return halted
     rec = special_watch.load_state().get(symbol)
     name = special.display_name(symbol, True)
     if not rec or rec.get("status") not in special_watch.TRACKING:
@@ -99,6 +101,9 @@ def confirm_trade(symbol: str) -> str:
     if sizing is None:
         return f"คำนวณขนาดไม้ของ {symbol} ไม่ได้ (MT5 ไม่พร้อม หรือโบรกเกอร์ไม่มีสัญลักษณ์นี้)"
     risk = float(rec["risk"])
+    from . import risk_gate
+    if refusal := risk_gate.pretrade(symbol, sizing["lots"], float(rec["entry"]) - float(rec["stop"])):
+        return refusal
     tp = float(rec["entry"]) + config.EA_TP_R * risk if config.EA_TP_R > 0 else 0.0
     row = ea_bridge.write_order_request(symbol, "BUY", sizing["lots"], float(rec["stop"]), tp,
                                         float(rec["entry"]), comment=f"trendjoin {rec['date']}")
@@ -109,6 +114,8 @@ def test_request(symbol: str | None = None) -> str:
     """System test of the bot -> EA path: always BUY TEST_SYMBOL at the minimum lot."""
     from . import special
 
+    if halted := ea_bridge.halt_message_th():
+        return halted
     if symbol and symbol.upper() != TEST_SYMBOL:
         log.info("test request for %s ignored: the EA test always uses %s", symbol, TEST_SYMBOL)
     symbol = TEST_SYMBOL

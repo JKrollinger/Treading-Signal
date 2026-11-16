@@ -4,9 +4,11 @@ Runs as its own process (``dashboard_server.py``, started by the scheduler) so i
 connection to the terminal and can never disturb the 5-minute signal jobs. One sampler thread
 reads the terminal about once a second and every browser tab is served from that snapshot.
 
-Read-only towards the broker: no route here can place, change or close an order. The page shows
-account figures, so the server binds to 127.0.0.1 and refuses any other Host header; it is
-deliberately not behind the Cloudflare tunnel (that one exposes the webhook port only).
+Read-only towards the broker: no route here can place, change or close an order. The one switch
+it has is the stop button, which only stops the bot from writing new order requests for the EA
+(see ``ea_bridge.set_halt``). The page shows account figures, so the server binds to 127.0.0.1 and
+refuses any other Host header; it is deliberately not behind the Cloudflare tunnel (that one
+exposes the webhook port only).
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, filters, mt5_source
+from . import config, ea_bridge, filters, mt5_source, risk_gate
 from . import trade_journal as journal
 from .special import display_name
 
@@ -33,7 +35,25 @@ log = logging.getLogger(__name__)
 
 UTC = timezone.utc
 PAGE = Path(__file__).with_name("dashboard.html")
+CLASSIC = Path(__file__).with_name("dashboard_classic.html")
 STATIC = Path(__file__).with_name("static")
+STATIC_FILES = {                 # the only files served from static/
+    "lightweight-charts.js": "application/javascript; charset=utf-8",
+    "gold-terminal.css": "text/css; charset=utf-8",
+    "gold-bars.webp": "image/webp",
+    "golden-bull.webp": "image/webp",
+    "golden-bear.webp": "image/webp",
+    "bot-avatar.webp": "image/webp",
+    "kill-shield.webp": "image/webp",
+    "strategy-trend.webp": "image/webp",
+    "strategy-daytrade.webp": "image/webp",
+    "strategy-stocks.webp": "image/webp",
+}
+SCHEDULER_LOG = config.PROJECT_ROOT / "logs" / "scheduler.log"
+LOG_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+JOURNAL_RE = re.compile(r"^journal_(\d+)\.json$")
+RISK_EVERY_S = 3.0
+EA_ONLINE_S = 60                # heartbeat younger than this: the EA is on a chart and running
 LIVE_POLL_S = 1.0
 CLOSED_POLL_S = 10.0            # MT5 closed: look for it now and then (it is never started from here)
 SYNC_EVERY_S = 20.0
@@ -61,6 +81,11 @@ class Hub:
         self.bars_cache: dict[tuple, tuple[float, list]] = {}
         self.clock_warned = False
         self.last_tick_time: int | None = None
+        self.ea_dir: Path | None = None             # <MT5 Common>/Files/signalbot, learned from the terminal
+        self.sl_cache: dict[tuple, float | None] = {}
+        self.settings = _settings()
+        self.risk: dict = {"enabled": config.RISK_GATE_ENABLED}
+        self.last_risk = 0.0
         self.stop = threading.Event()
         login = journal.latest_login()
         if login is not None:                   # records stay readable while MT5 is closed
@@ -90,6 +115,8 @@ class Hub:
             if acc is None or term is None:
                 self.state.update(connected=False, terminal_online=False, updated=stamp)
                 return False
+            if getattr(term, "commondata_path", ""):
+                self.ea_dir = Path(term.commondata_path) / "Files" / ea_bridge.SUBDIR
             if self.doc is None or self.doc["login"] != acc.login:
                 self.doc = journal.load(acc.login)
                 self.entry_cache.clear()
@@ -114,6 +141,14 @@ class Hub:
                 doc["account"] = {k: account[k] for k in ACCOUNT_KEPT}
                 journal.save(doc)
             rows = [self._position(mt5, doc, p) for p in positions]
+            if now - self.last_risk >= RISK_EVERY_S:
+                self.last_risk = now
+                try:
+                    self.risk = risk_gate.tick(acc.login, float(acc.balance), float(acc.equity),
+                                               journal.closed_totals(doc)["today"], doc=doc, folder=self._ea_folder())
+                    ea_bridge.mirror_halt(self._ea_folder())
+                except Exception:  # noqa: BLE001
+                    log.exception("risk gate failed")
             if now - self.last_watch >= WATCH_EVERY_S:
                 self.state["watch"] = self._watch(mt5)
                 self.last_watch = now
@@ -127,6 +162,7 @@ class Hub:
                 connected=True, terminal_online=bool(term.connected), updated=stamp, account=account, positions=rows,
                 closed=journal.closed_totals(doc), rev=doc["rev"], symbols=symbols, autostart=config.MT5_AUTOSTART,
                 market_open=any(w.get("fresh") for w in self.state["watch"]),
+                algo_trading=bool(term.trade_allowed), account_trade_allowed=bool(acc.trade_allowed),
             )
         return True
 
@@ -164,12 +200,23 @@ class Hub:
                  "symbol": p.symbol, "origin": "manual", "net": float(p.profit), "reason": -1, "hold_s": 0}
         risk, basis = journal._risk(draft, ctx)
         opened = journal.server_to_utc(p.time)
+        sl_pl = None                                # money at the stop: negative = what hitting it costs
+        if p.sl:
+            key = (ticket, float(p.sl), float(p.volume))
+            if key not in self.sl_cache:
+                try:
+                    order_type = mt5.ORDER_TYPE_BUY if side > 0 else mt5.ORDER_TYPE_SELL
+                    value = mt5.order_calc_profit(order_type, p.symbol, float(p.volume), entry, float(p.sl))
+                except Exception:  # noqa: BLE001
+                    value = None
+                self.sl_cache[key] = float(value) if value is not None else None
+            sl_pl = self.sl_cache[key]
         return {
             "ticket": ticket, "symbol": p.symbol, "name": display_name(p.symbol, True), "side": "buy" if side > 0 else "sell",
             "volume": float(p.volume), "entry": entry, "current": current, "sl": float(p.sl) or None, "tp": float(p.tp) or None,
             "profit": float(p.profit), "swap": float(p.swap), "opened": opened.isoformat(timespec="seconds"),
             "held_s": max(0, int((datetime.now(UTC) - opened).total_seconds())),
-            "r": side * (current - entry) / risk if risk else None, "risk_basis": basis,
+            "r": side * (current - entry) / risk if risk else None, "risk_basis": basis, "sl_pl": sl_pl,
             "checks": journal._checks({**draft, "sl": float(p.sl) or first_sl}) if ctx else [],
             "comment": (p.comment or "")[:40],
         }
@@ -279,9 +326,83 @@ class Hub:
             }
         return payload
 
+    def set_halt(self, on: bool) -> dict:
+        state = ea_bridge.set_halt(on, "dashboard", folder=self._ea_folder())
+        if not on:
+            with self.lock:
+                account = self.state.get("account") or {}
+                risk_gate.on_resume(account.get("login"), account.get("equity") if self.state.get("connected") else None)
+                self.last_risk = 0.0
+        return state
+
     def set_note(self, trade_id: str, note: str) -> bool:
         with self.lock:
             return bool(self.doc) and journal.set_note(self.doc, trade_id, note)
+
+    def _ea_folder(self) -> Path | None:
+        if config.EA_FILES_DIR:
+            return Path(config.EA_FILES_DIR)
+        if self.ea_dir is not None:
+            return self.ea_dir
+        appdata = os.environ.get("APPDATA")      # MT5 closed: its default Common folder
+        return Path(appdata) / "MetaQuotes" / "Terminal" / "Common" / "Files" / ea_bridge.SUBDIR if appdata else None
+
+    def system(self) -> dict:
+        """The EA bridge, the stop switch, the scheduler and the bot's settings."""
+        folder = self._ea_folder()
+        requests: list[dict] = []
+        results: list[dict] = []
+        heartbeat = None
+        if folder is not None:
+            try:
+                requests, results = ea_bridge.list_requests(folder), ea_bridge.list_results(folder)
+                heartbeat = ea_bridge.heartbeat_age_seconds(folder)
+            except OSError as exc:
+                log.debug("EA files unreadable: %s", exc)
+        by_id = {r["id"]: r for r in requests}
+        done = {r["id"] for r in results}
+        rows = []
+        for r in reversed(results[-15:]):
+            req = by_id.get(r["id"], {})
+            rows.append({
+                "id": r["id"], "time": _mql_utc(r.get("processed_utc")), "status": r.get("status"),
+                "ticket": r.get("ticket") if r.get("ticket") not in ("", "0") else None,
+                "price": _float(r.get("price")), "lots": _float(r.get("lots")), "message": (r.get("message") or "")[:160],
+                "symbol": req.get("symbol"), "side": (req.get("side") or "").lower() or None, "test": req.get("comment") == "test",
+            })
+        pending = [{"id": r["id"], "time": _mql_utc(r.get("created_utc")), "symbol": r.get("symbol"),
+                    "side": (r.get("side") or "").lower(), "lots": _float(r.get("lots")), "test": r.get("comment") == "test"}
+                   for r in requests if r["id"] not in done][-10:]
+        mode = next((r["status"] for r in reversed(results) if r.get("status") in ("FILLED", "DRYRUN")), None)
+        return {
+            "ok": True, "halt": ea_bridge.halt_state(), "scheduler": _scheduler_status(), "settings": self.settings,
+            "risk": self.risk,
+            "ea": {"enabled": config.EA_BRIDGE_ENABLED, "folder_found": bool(folder and folder.exists()),
+                   "heartbeat_age_s": heartbeat, "online": heartbeat is not None and heartbeat <= EA_ONLINE_S,
+                   "last_mode": mode, "results": rows, "pending": pending},
+        }
+
+    def accounts(self) -> dict:
+        """Every MT5 login this dashboard has kept a journal for."""
+        with self.lock:
+            current = self.doc
+            connected = bool(self.state.get("connected"))
+            live = self.state.get("account") if connected else None
+            current_row = _account_row(current, live) if current is not None else None
+        out = []
+        for path in sorted(config.DATA_DIR.glob("journal_*.json")):
+            m = JOURNAL_RE.match(path.name)
+            if not m:
+                continue
+            login = int(m.group(1))
+            if current_row is not None and current_row["login"] == login:
+                out.append({**current_row, "online": connected})
+                continue
+            try:
+                out.append({**_account_row(journal.load(login), None), "online": False})
+            except (OSError, ValueError, KeyError) as exc:
+                log.warning("journal %s unreadable: %s", path.name, exc)
+        return {"ok": True, "current": current["login"] if current else None, "connected": connected, "accounts": out}
 
 
 def _markers(bars: list[dict], trades: list[dict], positions: list[dict], signals: list[dict], symbol: str) -> list[dict]:
@@ -321,6 +442,74 @@ def _markers(bars: list[dict], trades: list[dict], positions: list[dict], signal
     return sorted(out, key=lambda m: m["t"])
 
 
+def _settings() -> dict:
+    """What the bot runs with (from .env); fixed for the life of the process."""
+    c = config
+    return {
+        "watchlist": list(c.SPECIAL_WATCHLIST), "watch_enabled": bool(c.SPECIAL_ENABLED and c.SPECIAL_WATCH_ENABLED),
+        "watch_every_min": c.SPECIAL_WATCH_INTERVAL_MIN, "source": c.SPECIAL_DATA_SOURCE,
+        "stop_atr": c.STOP_ATR_MULT, "partial_r": c.PARTIAL_R, "trail_atr": c.TRAIL_ATR_MULT, "max_hold_days": c.MAX_HOLD_DAYS,
+        "stale_min": c.STALE_QUOTE_MIN, "filter_symbols": list(c.TIME_FILTER_SYMBOLS),
+        "session_utc": [c.SESSION_UTC_START, c.SESSION_UTC_END], "friday_cutoff_utc": c.FRIDAY_CUTOFF_UTC,
+        "news_blackout_min": c.NEWS_BLACKOUT_MIN, "daytrade_enabled": c.DAYTRADE_ENABLED,
+        "daytrade_symbols": list(c.DAYTRADE_SYMBOLS), "stocks_enabled": c.STOCKS_ENABLED,
+        "spread_limit_pct": c.RISK_MAX_SPREAD_PCT if c.RISK_GATE_ENABLED else 0, "ea_enabled": c.EA_BRIDGE_ENABLED, "ea_risk_pct": c.EA_RISK_PCT, "ea_tp_r": c.EA_TP_R, "autostart": c.MT5_AUTOSTART,
+    }
+
+
+def _account_row(doc: dict, live: dict | None) -> dict:
+    trades = sorted(doc["trades"].values(), key=lambda t: t["exit_time"])
+    account = live or doc.get("account") or {}
+    cum, curve = 0.0, []
+    for t in trades:
+        cum += t["net"]
+        curve.append(round(cum, 2))
+    if len(curve) > 80:                      # enough points for a sparkline
+        step = len(curve) / 80
+        curve = [curve[int(i * step)] for i in range(80)] + [curve[-1]]
+    line = journal._line(trades)
+    return {
+        "login": doc["login"], "server": account.get("server"), "currency": account.get("currency"), "mode": account.get("mode"),
+        "balance": account.get("balance"), "equity": account.get("equity"), "floating": account.get("floating"),
+        "leverage": account.get("leverage"), "deposits": doc.get("deposits"), "trades": line["n"], "wins": line["wins"],
+        "win_rate": line["win_rate"], "net": line["net"], "curve": curve, "last_trade": trades[-1]["exit_time"] if trades else None,
+    }
+
+
+def _scheduler_status() -> dict:
+    """When the scheduler last wrote to its log, and when Scanner C last checked the market."""
+    try:
+        with SCHEDULER_LOG.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 16384))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return {"last": None, "last_watch": None}
+
+    def stamp(line: str) -> str | None:
+        m = LOG_TIME_RE.match(line)          # the log is in this PC's local time
+        return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").astimezone(UTC).isoformat(timespec="seconds") if m else None
+
+    last = next((t for t in map(stamp, reversed(lines)) if t), None)
+    watch = next((stamp(x) for x in reversed(lines) if "Scanner C watch" in x and stamp(x)), None)
+    return {"last": last, "last_watch": watch}
+
+
+def _mql_utc(text: str | None) -> str | None:
+    """'2026.10.28 02:36:04' (UTC, as the EA writes it) -> ISO."""
+    try:
+        return datetime.strptime((text or "").strip().replace("-", "."), "%Y.%m.%d %H:%M:%S").replace(tzinfo=UTC).isoformat()
+    except ValueError:
+        return None
+
+
+def _float(text) -> float | None:
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
 class _Handler(BaseHTTPRequestHandler):
     hub: Hub
 
@@ -350,8 +539,15 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/":
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
-            elif url.path == "/static/lightweight-charts.js":
-                self._send(200, (STATIC / "lightweight-charts.js").read_bytes(), "application/javascript; charset=utf-8", cache=True)
+            elif url.path == "/classic":
+                self._send(200, CLASSIC.read_bytes(), "text/html; charset=utf-8")
+            elif url.path.startswith("/static/") and url.path[8:] in STATIC_FILES:
+                name = url.path[8:]
+                self._send(200, (STATIC / name).read_bytes(), STATIC_FILES[name], cache=name.endswith((".js", ".webp")))
+            elif url.path == "/api/system":
+                self._json(200, self.hub.system())
+            elif url.path == "/api/accounts":
+                self._json(200, self.hub.accounts())
             elif url.path == "/api/live":
                 self._json(200, self.hub.live(*_chart_args(q)))
             elif url.path == "/api/chart":
@@ -377,14 +573,23 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"ok": False, "error": "forbidden"})
             return
         length = int(self.headers.get("Content-Length") or 0)
-        if urlparse(self.path).path != "/api/note" or length > MAX_BODY:
+        path = urlparse(self.path).path
+        if path not in ("/api/note", "/api/halt") or length > MAX_BODY:
             self._json(400, {"ok": False})
             return
         try:
             data = json.loads(self.rfile.read(length).decode("utf-8"))
-            self._json(200, {"ok": self.hub.set_note(str(data["id"]), str(data.get("note") or ""))})
-        except (ValueError, KeyError):
+            if path == "/api/halt":
+                if not isinstance(data.get("halt"), bool):
+                    raise ValueError("halt must be true or false")
+                self._json(200, {"ok": True, "halt": self.hub.set_halt(data["halt"])})
+            else:
+                self._json(200, {"ok": self.hub.set_note(str(data["id"]), str(data.get("note") or ""))})
+        except (ValueError, KeyError, AttributeError):
             self._json(400, {"ok": False})
+        except OSError as exc:
+            log.error("dashboard could not save %s: %s", path, exc)
+            self._json(500, {"ok": False})
 
     def log_message(self, fmt, *args) -> None:
         log.debug("http: " + fmt, *args)

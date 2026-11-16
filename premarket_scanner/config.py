@@ -123,6 +123,11 @@ EA_RISK_PCT: float = _env_float("EA_RISK_PCT", 1.0)            # % of balance ri
 EA_TP_R: float = _env_float("EA_TP_R", 1.0)                    # take-profit written to the request, in R (0 = none)
 EA_REQUEST_MAX_AGE_MIN: int = _env_int("EA_REQUEST_MAX_AGE_MIN", 15)
 EA_RESULTS_TO_GROUP: bool = _env_bool("EA_RESULTS_TO_GROUP", False)   # EA outcomes of confirmed signals (never the 🧪 tests)
+# Risk gate: can only block order requests. A breach switches the dashboard's stop on by itself.
+RISK_GATE_ENABLED: bool = _env_bool("RISK_GATE_ENABLED", True)
+RISK_DAILY_LOSS_PCT: float = _env_float("RISK_DAILY_LOSS_PCT", 2.0)       # loss of the day (closed + floating), 0 = off
+RISK_MAX_DRAWDOWN_PCT: float = _env_float("RISK_MAX_DRAWDOWN_PCT", 8.0)   # from the equity high-water mark, 0 = off
+RISK_MAX_SPREAD_PCT: float = _env_float("RISK_MAX_SPREAD_PCT", 10.0)      # spread as % of the stop distance, 0 = off
 TELEGRAM_COMMANDS_ENABLED: bool = _env_bool("TELEGRAM_COMMANDS_ENABLED", True)   # buttons + /status /orders
 SPECIAL_WATCHLIST: list[str] = [
     s.strip().upper()
