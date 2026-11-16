@@ -216,6 +216,7 @@ td.tick-down{animation:flashDown .9s ease-out}
 <div class="ticker" aria-label="ราคาและสถานะล่าสุด"><div class="ticker-track" id="ticker-track"></div></div>
 <div class="alert bad" id="halt-banner" hidden></div>
 <div class="alert" id="banner" hidden></div>
+<div class="alert bad" id="coach-banner" hidden></div>
 
 <!-- Overview ------------------------------------------------------------------------- -->
 <section id="overview" class="view active">
@@ -316,6 +317,9 @@ td.tick-down{animation:flashDown .9s ease-out}
       <button class="btn" id="export">↧ EXPORT CSV</button>
     </div></div>
   <div class="cards page-cards" id="j-cards"></div>
+  <div class="panel bigpanel" id="scalp-panel"><div class="panelhead"><h3>⚡ ผู้ช่วยสแกลป์ · ไม้ที่คุณเปิดเอง</h3><span class="small" id="scalp-note"></span></div>
+    <div class="cards" id="scalp-cards" style="margin-top:0"></div>
+    <div class="grid2" id="scalp-body"></div></div>
   <div class="journal-visuals">
     <div class="panel"><div class="panelhead"><h3>▥ กำไรขาดทุนรายไม้</h3><span class="small" id="tradebars-note"></span></div><div id="tradebars"></div></div>
     <div class="panel"><div class="panelhead"><h3>◉ ชนะ / แพ้</h3><span class="small">ไม้ที่ปิดในช่วงที่เลือก</span></div><div class="journal-distribution" id="ring"></div></div>
@@ -690,6 +694,9 @@ function renderTop(s){
   }
   const d = bkk(nowSec());
   $('#clock').textContent = `${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth()+1)} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} BKK`;
+  const cb = $('#coach-banner'), coach = s.coach || [];
+  cb.hidden = !coach.length;
+  if (coach.length) cb.textContent = 'ผู้ช่วยสแกลป์: ' + coach.map(c => c.text).join('  ·  ');
   const b = $('#banner');
   if (!s.connected){ b.hidden = false; b.textContent = (s.autostart ? 'กำลังรอ MT5' : 'MT5 ปิดอยู่ บอทจะไม่เปิดให้เอง เปิดโปรแกรม MT5 แล้วหน้านี้จะซิงค์เองภายใน 10 วินาที') + (a ? ' · ตัวเลขที่เห็นคือค่าล่าสุดที่อ่านได้' : ''); }
   else if (!s.terminal_online){ b.hidden = false; b.textContent = 'MT5 เปิดอยู่แต่ยังไม่ต่อกับโบรกเกอร์ ราคาจะไม่ขยับจนกว่าจะต่อได้'; }
@@ -1048,8 +1055,32 @@ async function loadJournal(){
   renderJournal(d);
 }
 for (const id of ['#f-period', '#f-symbol', '#f-origin']) $(id).onchange = loadJournal;
+function scalpTable(title, rows, unit){
+  return `<div><div class="panelhead" style="margin:0 0 6px"><h3>${title}</h3></div><div class="tablewrap"><table><thead><tr><th>${unit}</th><th class="n">ไม้</th><th class="n">ชนะ</th><th class="n">กำไรสุทธิ</th><th class="n">เฉลี่ย/ไม้ (ราคา)</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${esc(r.key)}</td><td class="n">${r.n}</td><td class="n">${pct(r.win_rate, 0)}</td><td class="n ${cls(r.net)}">${money(r.net, true)}</td><td class="n ${cls(r.avg_move)}">${r.avg_move == null ? '-' : (r.avg_move > 0 ? '+' : '') + num(r.avg_move, 2)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+function renderScalp(c){
+  if (!c) return;
+  const p = c.plan;
+  $('#scalp-note').textContent = `แผน: S/L ทุกไม้ · ออกภายใน ${p.max_hold_min} นาที · ${c.n} ไม้ในช่วงที่เลือก`;
+  if (!c.n){ setHTML($('#scalp-cards'), ''); setHTML($('#scalp-body'), '<div class="empty">ยังไม่มีไม้ที่เปิดเองในช่วงที่เลือก</div>'); return; }
+  const edge = c.edge, mins = s => s == null ? '-' : s < 3600 ? num(s / 60, 0) + ' นาที' : num(s / 3600, 1) + ' ชม.';
+  setHTML($('#scalp-cards'), [
+    card('ชนะ เทียบ จุดเท่าทุน', `${pct(c.win_rate, 0)} / ${c.breakeven == null ? '-' : pct(c.breakeven, 0)}`, edge == null ? 'ยังไม่มีทั้งไม้ชนะและไม้แพ้' : edge >= 0 ? `สูงกว่าจุดเท่าทุน ${num(edge, 0)} จุด` : `ต่ำกว่าจุดเท่าทุน ${num(-edge, 0)} จุด`, edge == null ? '' : edge >= 0 ? 'up' : 'down', '', '◎'),
+    card('ไม้ชนะ / ไม้แพ้ เฉลี่ย', `${c.avg_win == null ? '-' : '+' + num(c.avg_win, 2)} / ${c.avg_loss == null ? '-' : '−' + num(c.avg_loss, 2)}`, c.payoff == null ? 'หน่วยราคาต่อไม้' : `ไม้ชนะใหญ่เป็น ${num(c.payoff, 2)} เท่าของไม้แพ้`, c.payoff == null ? '' : c.payoff >= 1 ? 'up' : 'down', '', '⇅'),
+    card('ไม่ตั้ง S/L', `${c.no_sl} / ${c.n}`, c.no_sl ? 'ทุกไม้ควรมี S/L ตั้งแต่เปิด' : 'ครบทุกไม้', c.no_sl ? 'down' : 'up', c.no_sl ? 'down' : '', '⛨'),
+    card(`ถือเกิน ${p.max_hold_min} นาที`, `${c.over_hold} / ${c.n}`, `ไม้ชนะถือ ${mins(c.hold_win_s)} · ไม้แพ้ถือ ${mins(c.hold_loss_s)}`, c.over_hold ? 'down' : 'up', '', '⏱'),
+  ].join(''));
+  const kind = {bad:['off', '✕'], warn:['warn', '!'], good:['ok', '✓'], info:['warn', 'i']};
+  setHTML($('#scalp-body'), `<div><div class="panelhead" style="margin:0 0 6px"><h3>สิ่งที่ตัวเลขบอก</h3></div>
+      ${(c.notes || []).map(n => `<div class="finding"><span class="state ${kind[n.kind][0]}">${kind[n.kind][1]}</span> <b>${esc(n.title)}</b><div class="small" style="margin-top:3px;white-space:normal">${esc(n.text)}</div></div>`).join('') || '<div class="empty">ยังไม่มีข้อสังเกต</div>'}</div>
+    ${scalpTable('ตามระยะเวลาที่ถือ', c.by_hold, 'ระยะถือ')}
+    ${scalpTable('ตามช่วงตลาด', c.by_session, 'ช่วง')}
+    ${scalpTable('ตามชั่วโมงที่เข้า (เวลาไทย)', c.by_hour, 'ชั่วโมง')}`);
+}
 function renderJournal(d){
   const sm = d.summary;
+  renderScalp(d.scalp);
   setHTML($('#j-cards'), [
     card('ไม้ที่ปิด', pad2(sm.n), `${sm.wins} ชนะ · ${sm.losses} แพ้`, '', '', '◎'),
     card('อัตราชนะ', counted('j-wr', sm.win_rate, 'pct', pct(sm.win_rate)), 'ไม้กำไร ÷ ไม้ทั้งหมด', sm.win_rate >= 50 ? 'up' : '', '', '✓'),

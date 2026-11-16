@@ -131,6 +131,10 @@ RISK_GATE_ENABLED: bool = _env_bool("RISK_GATE_ENABLED", True)
 RISK_DAILY_LOSS_PCT: float = _env_float("RISK_DAILY_LOSS_PCT", 2.0)       # loss of the day (closed + floating), 0 = off
 RISK_MAX_DRAWDOWN_PCT: float = _env_float("RISK_MAX_DRAWDOWN_PCT", 8.0)   # from the equity high-water mark, 0 = off
 RISK_MAX_SPREAD_PCT: float = _env_float("RISK_MAX_SPREAD_PCT", 10.0)      # spread as % of the stop distance, 0 = off
+# Scalping assistant (premarket_scanner/scalp_coach.py): reads the owner's trades, reminds, never trades
+SCALP_COACH_ENABLED: bool = _env_bool("SCALP_COACH_ENABLED", True)
+SCALP_MAX_HOLD_MIN: int = _env_int("SCALP_MAX_HOLD_MIN", 10)         # a scalp held longer than this broke the plan
+SCALP_NO_SL_GRACE_S: int = _env_int("SCALP_NO_SL_GRACE_S", 60)       # seconds a new position may go without a stop
 # Demo-to-real checklist on the dashboard (premarket_scanner/readiness.py). It only reports.
 GO_LIVE_MIN_TRADES: int = _env_int("GO_LIVE_MIN_TRADES", 30)          # closed Trend-join signals
 GO_LIVE_MIN_WEEKS: int = _env_int("GO_LIVE_MIN_WEEKS", 8)             # since the first signal

@@ -707,6 +707,7 @@ overwrites that day's file.
 | `PORTFOLIO_TO_GROUP` | `false` | Also send the account section and position alerts to the groups. |
 | `EA_BRIDGE_ENABLED` | `true` | Confirm button on MT5-quoted signals; order requests written for the EA. |
 | `EA_FILES_DIR` | empty | Override the request/result folder (default `<MT5 Common>\Files\signalbot`). |
+| `SCALP_COACH_ENABLED`, `SCALP_MAX_HOLD_MIN`, `SCALP_NO_SL_GRACE_S` | `true`, `10`, `60` | Scalping assistant (`premarket_scanner/scalp_coach.py`): the journal page reviews the trades you opened yourself (win rate against the break-even rate of your own win/loss sizes, results by holding time, session and hour), and an open position without a stop or held past the limit is flagged on the dashboard and once on Telegram. It never places, changes or closes an order. |
 | `GO_LIVE_MIN_TRADES`, `GO_LIVE_MIN_WEEKS`, `GO_LIVE_MIN_AVG_R`, `GO_LIVE_MIN_PF`, `GO_LIVE_MAX_DD_R`, `GO_LIVE_MAX_LOSS_STREAK`, `GO_LIVE_MIN_EA_TRADES` | `30`, `8`, `0.10`, `1.2`, `10`, `8`, `10` | Demo-to-real checklist on the dashboard's risk page: closed Trend-join signals, weeks running, average R, profit factor, deepest drawdown in R, longest losing run, EA-filled signals. It only reports (`premarket_scanner/readiness.py`). |
 | `EA_RISK_PCT` | `1.0` | Percent of balance risked to the stop when sizing a request. |
 | `EA_TP_R` | `1.0` | Take-profit written to the request, in R (0 = none; the bot still trails). |
@@ -820,3 +821,5 @@ None of them changes what the bot does.
 | `backtest_squeeze.py` | Enter only after an NR7 / Inside Day, or only with room below resistance? | No reliable gain; not adopted. |
 | `backtest_pullback.py` | Buy the pullback to the daily EMA20 instead of the breakout? | MT5 and Yahoo disagree; not adopted. |
 | `backtest_gold.py` | Gold only: what raises the win rate, and does the short side pay? | See the table it prints; `--source mt5 --days 3650` uses about 10 years. |
+| `backtest_gold_short.py` | Gold: can any short rule (3 regimes x slope x ADX x 2 entries x 5 exits = 120 sets) earn its place? Rules are ranked before 2022 and tested after. | None: 3 of 120 were positive before 2022, 1 stayed positive after, best +0.05R per trade. Shorts stay off. |
+| `backtest_gold_scalp.py` | Gold scalping on M5, both sides: EMA pullback, opening-range breakout, momentum bar, band fade (50 rule sets, cost 0.30 per round trip, ranked before 2026-03 and tested after). | None: 3 of 50 positive in the first part, 1 in both, best +0.04R / +0.02R per trade. |

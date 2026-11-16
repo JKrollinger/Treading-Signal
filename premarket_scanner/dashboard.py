@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, dashboard_auth, decision_log, ea_bridge, readiness, filters, mt5_source, risk_gate
+from . import config, dashboard_auth, decision_log, ea_bridge, readiness, scalp_coach, filters, mt5_source, risk_gate
 from . import trade_journal as journal
 from .special import display_name
 
@@ -152,6 +152,10 @@ class Hub:
                 doc["account"] = {k: account[k] for k in ACCOUNT_KEPT}
                 journal.save(doc)
             rows = [self._position(mt5, doc, p) for p in positions]
+            try:
+                self.state["coach"] = scalp_coach.watch(rows)
+            except Exception:  # noqa: BLE001
+                log.exception("scalp coach failed")
             if now - self.last_risk >= RISK_EVERY_S:
                 self.last_risk = now
                 try:
@@ -229,7 +233,7 @@ class Hub:
             "held_s": max(0, int((datetime.now(UTC) - opened).total_seconds())),
             "r": side * (current - entry) / risk if risk else None, "risk_basis": basis, "sl_pl": sl_pl,
             "checks": journal._checks({**draft, "sl": float(p.sl) or first_sl}) if ctx else [],
-            "comment": (p.comment or "")[:40],
+            "comment": (p.comment or "")[:40], "ea": int(p.magic) == journal.EA_MAGIC,
         }
 
     def _watch(self, mt5) -> list[dict]:
@@ -333,7 +337,7 @@ class Hub:
             payload = {
                 "ok": True, "currency": account.get("currency", ""), "rev": doc["rev"], "symbols": every, "trades": rows,
                 "summary": journal.summarize(rows), "analysis": journal.analysis(rows), "deposits": doc.get("deposits"),
-                "signals": journal.bot_signals(),
+                "signals": journal.bot_signals(), "scalp": scalp_coach.review(rows),
             }
         return payload
 
