@@ -51,6 +51,18 @@ tbody tr.click:focus-visible{outline:2px solid #efc778;outline-offset:-2px}
 .key-tri{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--green)}
 .key-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
 .key-sq{width:8px;height:8px;background:var(--gold)}
+.key-scalp{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid #b48cff}
+.entry-box{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.entry-col{border:1px solid #2c2f33;border-radius:8px;padding:10px 12px;font-size:12px;background:#11131580;min-width:0}
+.entry-h{font-weight:600;color:#f3f0ea;margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.entry-kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;color:#a9a59c}
+.entry-kv b{color:#f3f0ea;font-variant-numeric:tabular-nums;font-weight:600}
+.entry-note{margin-top:6px;font-size:11px;line-height:1.55;color:#9a9da1;white-space:normal}
+.entry-note.bad{color:#ff8f9b}.entry-note.good{color:var(--green)}
+.btn.confirm{width:100%;margin-top:8px;padding:9px 10px;border-color:#edbe61;background:linear-gradient(180deg,#f3cf82,#c9963b);color:#16120a;font-weight:700}
+.btn.confirm:disabled{background:#24262a;border-color:#34373c;color:#74787e;cursor:not-allowed}
+.entry-tools{grid-column:1/-1;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11px;color:#9a9da1}
+@media(max-width:1180px){.entry-box{grid-template-columns:1fr}}
 .empty{color:#8f969f;padding:14px 0;text-align:center;font-size:11px}
 .cond{list-style:none;margin:4px 0 0;padding:0;font-size:10px;color:#a7aeb4}
 .cond li{display:flex;gap:6px;padding:1px 0}
@@ -251,10 +263,17 @@ td.tick-down{animation:flashDown .9s ease-out}
       </div>
       <div class="readout" id="readout"></div>
       <div class="chart-box" id="chart"><div class="chart-msg" id="chart-msg" hidden></div></div>
-      <div class="legend">
+      <div class="legend" id="chart-legend">
         <span><i class="key-tri"></i>จุดเข้า</span><span><i class="key-dot"></i>จุดออก (กำไร/ขาดทุน)</span><span><i class="key-sq"></i>สัญญาณบอท</span>
+        <span><i class="key-scalp"></i>จุดเข้าสแกลป์ M5 (ทดลอง)</span><span><i class="key-dash" style="border-color:var(--gold)"></i>ระดับเข้า Trend-join</span>
         <span><i class="key-dash"></i>High/Low เมื่อวาน</span><span><i class="key-line" style="background:#4289f2"></i>SMA200</span>
         <span><i class="key-line" style="background:var(--red)"></i>S/L</span><span><i class="key-line" style="background:var(--green)"></i>T/P</span>
+      </div>
+      <div class="entry-box" id="entry-box">
+        <div class="entry-col"><div class="entry-h">🎯 สัญญาณ Trend-join</div><div id="entry-signal"></div></div>
+        <div class="entry-col"><div class="entry-h">⏳ คำสั่งรอที่ควรตั้งใน MT5</div><div id="entry-pending"></div></div>
+        <div class="entry-col"><div class="entry-h">⚡ จุดเข้าสแกลป์ M5 <span class="state warn">ทดลอง</span></div><div id="entry-scalp"></div></div>
+        <div class="entry-tools"><label><input type="checkbox" id="entry-sound" checked> เสียงเตือนเมื่อเกิดจุดเข้า</label><button class="btn" data-act="beep">ทดสอบเสียง</button><button class="btn" data-act="notify">เปิดแจ้งเตือนบนจอ</button><span>ระบบไม่ส่งคำสั่งเอง ทุกไม้ต้องมาจากการกดของคุณ</span></div>
       </div>
     </div>
     <div class="panel">
@@ -494,6 +513,7 @@ const segment = chart.addLineSeries({color:C.gold, lineWidth:2, priceLineVisible
 const pulse = chart.addLineSeries({color:C.gold, lineWidth:1, lineVisible:false, pointMarkersVisible:false, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
   lastPriceAnimation:REDUCED ? LightweightCharts.LastPriceAnimationMode.Disabled : LightweightCharts.LastPriceAnimationMode.Continuous});  // breathing dot on the last price
 const toBar = b => ({time:b.t + BKK, open:b.o, high:b.h, low:b.l, close:b.c});
+const SCALP = '#b48cff';
 function barLabel(time){ const d = new Date(time * 1000); return `${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth()+1)} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`; }
 function readout(b, label){
   const el = $('#readout');
@@ -515,6 +535,7 @@ function drawMarkers(){
     const time = m.t + BKK;
     if (m.kind === 'entry') return {time, position:m.side === 'buy' ? 'belowBar' : 'aboveBar', shape:m.side === 'buy' ? 'arrowUp' : 'arrowDown', color:m.side === 'buy' ? C.up : C.down, text:m.text};
     if (m.kind === 'exit') return {time, position:m.side === 'buy' ? 'aboveBar' : 'belowBar', shape:'circle', color:m.win ? C.up : C.down, text:m.text};
+    if (m.kind === 'scalp') return {time, position:m.side === 'buy' ? 'belowBar' : 'aboveBar', shape:m.side === 'buy' ? 'arrowUp' : 'arrowDown', color:SCALP, text:'S'};
     return {time, position:'aboveBar', shape:'square', color:C.gold, text:m.text};
   });
   candles.setMarkers(list);
@@ -526,6 +547,15 @@ function lineDefs(){
     add(S.levels.y_high, C.muted, 'High เมื่อวาน', D.Dashed);
     add(S.levels.y_low, C.muted, 'Low เมื่อวาน', D.Dashed);
     if (S.tf !== 'D1') add(S.levels.sma200, C.sma, 'SMA200', D.Solid, 2);
+  }
+  const w = (live().watch || []).find(x => x.symbol === S.symbol);
+  if (w && $('#show-levels').checked){
+    if (w.signal){ add(w.signal.entry, C.gold, `สัญญาณ #${w.signal.no || ''} จุดเข้า`, D.Solid, 2); add(w.signal.stop, C.down, 'S/L ของสัญญาณ', D.Dashed); }
+    else if (w.plan && w.plan.ok){ add(w.plan.entry, C.gold, 'Buy Stop ที่ควรตั้ง', D.Dashed, 2); add(w.plan.stop, C.down, 'S/L ของคำสั่งรอ', D.Dotted); }
+  }
+  const sc = S.scalp;
+  if (sc && sc.recent && S.tf === 'M5'){
+    add(sc.entry, SCALP, `สแกลป์ทดลอง ${sc.side === 'buy' ? 'ซื้อ' : 'ขาย'}`, D.Dotted); add(sc.sl, SCALP, 'S/L ทดลอง', D.Dotted); add(sc.tp, SCALP, 'เป้าทดลอง', D.Dotted);
   }
   for (const p of S.positions.filter(p => p.symbol === S.symbol)){
     add(p.entry, C.ink, `เข้า ${p.side === 'buy' ? 'ซื้อ' : 'ขาย'} ${p.volume}`, D.Solid);
@@ -556,7 +586,7 @@ async function loadChart(count){
     return;
   }
   chartMessage('');
-  S.digits = d.digits; S.levels = d.levels || {}; S.markers = d.markers || [];
+  S.digits = d.digits; S.levels = d.levels || {}; S.markers = d.markers || []; S.scalp = d.scalp || null; S.chartAt = Date.now();
   candles.applyOptions({priceFormat:{type:'price', precision:d.digits, minMove:Math.pow(10, -d.digits)}});
   const bars = d.bars.map(toBar);
   candles.setData(bars);
@@ -678,7 +708,88 @@ document.addEventListener('pointermove', e => {
 });
 
 /* Top bar and hero ----------------------------------------------------------------------- */
+// Entry desk: the live signal with its one-click confirm, the pending order to place by hand, the M5 study
+function beep(){
+  try {
+    const a = S.audio || (S.audio = new (window.AudioContext || window.webkitAudioContext)());
+    const o = a.createOscillator(), g = a.createGain();
+    o.frequency.value = 880; o.connect(g); g.connect(a.destination);
+    g.gain.setValueAtTime(.001, a.currentTime); g.gain.exponentialRampToValueAtTime(.25, a.currentTime + .02); g.gain.exponentialRampToValueAtTime(.001, a.currentTime + .6);
+    o.start(); o.stop(a.currentTime + .62);
+  } catch (e) {}
+}
+function soundOn(){ try { return localStorage.getItem('gt-sound') !== '0'; } catch (e) { return true; } }
+function alertEntry(title, body){
+  if (soundOn()) beep();
+  try { if (window.Notification && Notification.permission === 'granted') new Notification(title, {body}); } catch (e) {}
+}
+function entryKv(k, v){ return `<div class="entry-kv"><span>${k}</span><b>${v}</b></div>`; }
+function renderEntry(s){
+  const box = $('#entry-box');
+  if (!box) return;
+  const w = (s.watch || []).find(x => x.symbol === S.symbol), f = v => v == null ? '-' : num(v, (w && w.digits) || S.digits || 2);
+  let sig = '<div class="entry-note">สัญลักษณ์นี้ไม่ได้อยู่ในรายการเฝ้าดูของบอท</div>', pend = sig;
+  if (w && w.price != null){
+    const g = w.signal;
+    if (g){
+      const mins = g.age_s == null ? '-' : Math.floor(g.age_s / 60) + ' นาที';
+      const m = S.confirmMsg && S.confirmMsg.sym === w.symbol ? S.confirmMsg : null;
+      sig = entryKv('สัญญาณ', '#' + esc(String(g.no == null ? '-' : g.no)) + ' ซื้อ') + entryKv('จุดเข้า', f(g.entry)) + entryKv('S/L', f(g.stop)) + entryKv('ราคาตอนนี้', f(w.price)) + entryKv('เกิดมาแล้ว', mins)
+        + `<button class="btn confirm" data-act="confirm" data-sym="${esc(w.symbol)}" ${g.can && !S.confirming ? '' : 'disabled'}>${S.confirming ? 'กำลังส่ง…' : '✓ ยืนยัน ให้ EA ส่งคำสั่งซื้อ'}</button>`
+        + (g.can ? '<div class="entry-note">กดปุ่ม หรือ Shift+Enter · EA คำนวณล็อตตามความเสี่ยงที่ตั้งไว้ และส่งพร้อม S/L</div>' : `<div class="entry-note bad">${esc(g.note || '')}</div>`)
+        + (m ? `<div class="entry-note ${m.ok ? 'good' : 'bad'}" style="white-space:pre-wrap">${esc(m.text)}</div>` : '');
+    } else {
+      const why = w.uptrend === false ? 'ราคาปิดเมื่อวานอยู่ใต้ SMA200 ระบบซื้อเฉพาะขาขึ้น' : w.strong === false ? `ADX รายวัน ${w.adx == null ? '-' : num(w.adx, 1)} ต่ำกว่า ${num(w.adx_min, 0)}`
+        : !w.above ? `รอราคาทะลุ High เมื่อวาน ${f(w.y_high)} (ขาดอีก ${f(w.to_breakout)})` : !w.at_high ? 'ทะลุแล้ว แต่ราคาถอยจาก High ของวัน' : w.held ? 'ครบเงื่อนไข แต่ตัวกรองเวลา/ข่าวให้รอ' : 'ครบเงื่อนไข รอรอบตรวจของบอท (ทุก 5 นาที)';
+      sig = `<div class="entry-note" style="color:#e9e6df">ยังไม่มีสัญญาณ</div><div class="entry-note">${esc(why)}</div><button class="btn confirm" disabled>✓ ยืนยัน ให้ EA ส่งคำสั่งซื้อ</button><div class="entry-note">ปุ่มจะใช้ได้เมื่อบอทออกสัญญาณ และจะมีเสียงเตือน</div>`;
+    }
+    const p = w.plan || {};
+    pend = p.ok
+      ? entryKv('ประเภท', 'Buy Stop') + entryKv('ราคาที่ตั้ง', f(p.entry)) + entryKv('S/L', f(p.stop)) + entryKv('ขนาด', p.lots == null ? '-' : num(p.lots, 2) + ' ล็อต')
+        + entryKv(`ความเสี่ยง ${num(p.risk_pct, 1)}%`, p.risk_money == null ? '-' : money(p.risk_money))
+        + `<button class="btn" data-act="copy" data-text="Buy Stop ${esc(w.symbol)} ราคา ${f(p.entry)} S/L ${f(p.stop)} ${p.lots == null ? '' : num(p.lots, 2) + ' ล็อต'}" style="width:100%;margin-top:8px">⧉ คัดลอกตัวเลข</button>`
+        + `<div class="entry-note">ตั้งเองใน MT5 แล้วโบรกเกอร์เปิดไม้ให้ทันทีที่ราคาถึง · ยกเลิกเมื่อสิ้นวัน${p.gold_filter ? ' และนอกช่วง 7–20 UTC หรือใกล้ข่าว' : ''} · คำสั่งรอเข้าทันทีที่ราคาแตะ ต่างจากกฎของบอทที่รอแท่งปิดเหนือระดับ</div>`
+      : `<div class="entry-note" style="color:#e9e6df">ตอนนี้ยังไม่ควรตั้งคำสั่งรอ</div><div class="entry-note">${esc(p.reason || '')}</div>`;
+  }
+  const sc = S.scalp;
+  let scalp;
+  if (S.tf !== 'M5') scalp = '<div class="entry-note">จุดเข้าสแกลป์แสดงบนกราฟ 5 นาที</div><button class="btn" data-act="m5" style="width:100%;margin-top:8px">เปลี่ยนเป็นกราฟ M5</button>';
+  else if (!sc) scalp = '<div class="entry-note" style="color:#e9e6df">ยังไม่มีจุดเข้าในช่วงที่แสดง</div>';
+  else scalp = entryKv('ล่าสุด', (sc.side === 'buy' ? 'ซื้อ' : 'ขาย') + ' · ' + (sc.recent ? 'เพิ่งเกิด' : sc.age_bars + ' แท่งก่อน')) + entryKv('จุดเข้า', f(sc.entry)) + entryKv('S/L (2 ATR)', f(sc.sl)) + entryKv('เป้า (1R)', f(sc.tp));
+  scalp += '<div class="entry-note">กฎทดลอง: สวนกลับเมื่อแท่งปิดนอกกรอบ 2 ส่วนเบี่ยงเบนในตลาดไม่มีแนวโน้ม ช่วง 7–20 UTC · ทดสอบย้อนหลังได้เพียง +0.03R ต่อไม้หลังหักสเปรด จึงไม่มีปุ่มส่งคำสั่ง ใช้ประกอบการตัดสินใจเท่านั้น</div>';
+  setHTML($('#entry-signal'), sig); setHTML($('#entry-pending'), pend); setHTML($('#entry-scalp'), scalp);
+  const g = w && w.signal;
+  if (g && g.no !== S.seenSignal){ S.seenSignal = g.no; if (g.can) alertEntry(`สัญญาณ Trend-join #${g.no} ${w.symbol}`, `จุดเข้า ${f(g.entry)} · S/L ${f(g.stop)}`); }
+  if (sc && sc.recent && sc.t !== S.seenScalp){ S.seenScalp = sc.t; alertEntry('จุดเข้าสแกลป์ M5 (ทดลอง)', `${sc.side === 'buy' ? 'ซื้อ' : 'ขาย'} ${f(sc.entry)}`); }
+  if (S.tf === 'M5' && S.chartReady && Date.now() - (S.chartAt || 0) > 60000){ S.chartAt = Date.now(); loadChart(); }
+  drawLines();
+}
+async function confirmEntry(sym){
+  if (S.confirming) return;
+  S.confirming = true; renderEntry(live());
+  try {
+    const r = await api('/api/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol:sym})});
+    S.confirmMsg = {sym, ok:!!r.ok, text:r.text || 'ส่งไม่สำเร็จ'};
+  } catch (e) { S.confirmMsg = {sym, ok:false, text:'ส่งไม่สำเร็จ ลองใหม่หรือใช้ปุ่มใน Telegram'}; }
+  S.confirming = false; renderEntry(live());
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('#entry-box [data-act]');
+  if (!b || b.disabled) return;
+  if (b.dataset.act === 'confirm') confirmEntry(b.dataset.sym);
+  else if (b.dataset.act === 'copy'){ try { navigator.clipboard.writeText(b.dataset.text); b.textContent = '✓ คัดลอกแล้ว'; setTimeout(() => { b.textContent = '⧉ คัดลอกตัวเลข'; }, 1500); } catch (err) {} }
+  else if (b.dataset.act === 'm5'){ S.tf = 'M5'; clearFocus(); markTf(); loadChart().then(() => chart.timeScale().scrollToRealTime()); }
+  else if (b.dataset.act === 'notify'){ try { Notification.requestPermission().then(p => { b.textContent = p === 'granted' ? '✓ เปิดแจ้งเตือนบนจอแล้ว' : 'เบราว์เซอร์ไม่อนุญาตการแจ้งเตือน'; }); } catch (err) { b.textContent = 'เบราว์เซอร์นี้ไม่รองรับ'; } }
+  else if (b.dataset.act === 'beep') beep();
+});
+document.addEventListener('change', e => { if (e.target.id === 'entry-sound'){ try { localStorage.setItem('gt-sound', e.target.checked ? '1' : '0'); } catch (err) {} if (e.target.checked) beep(); } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !e.shiftKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''))) return;
+  const b = document.querySelector('#entry-box [data-act="confirm"]:not([disabled])');
+  if (b){ e.preventDefault(); confirmEntry(b.dataset.sym); }
+});
 function renderTop(s){
+  renderEntry(s);
   const c = $('#conn');
   const st = !s.connected ? ['connection off', '● MT5 ปิดอยู่ · แสดงค่าล่าสุด'] : !s.terminal_online ? ['connection off', '● MT5 ไม่ได้ต่อโบรกเกอร์'] : ['connection', '<span class="status-led"></span>LIVE · ซิงค์กับ MT5'];
   c.className = st[0]; setHTML(c, st[1]);
@@ -1067,7 +1178,7 @@ function renderScalp(c){
   const edge = c.edge, mins = s => s == null ? '-' : s < 3600 ? num(s / 60, 0) + ' นาที' : num(s / 3600, 1) + ' ชม.';
   setHTML($('#scalp-cards'), [
     card('ชนะ เทียบ จุดเท่าทุน', `${pct(c.win_rate, 0)} / ${c.breakeven == null ? '-' : pct(c.breakeven, 0)}`, edge == null ? 'ยังไม่มีทั้งไม้ชนะและไม้แพ้' : edge >= 0 ? `สูงกว่าจุดเท่าทุน ${num(edge, 0)} จุด` : `ต่ำกว่าจุดเท่าทุน ${num(-edge, 0)} จุด`, edge == null ? '' : edge >= 0 ? 'up' : 'down', '', '◎'),
-    card('ไม้ชนะ / ไม้แพ้ เฉลี่ย', `${c.avg_win == null ? '-' : '+' + num(c.avg_win, 2)} / ${c.avg_loss == null ? '-' : '−' + num(c.avg_loss, 2)}`, c.payoff == null ? 'หน่วยราคาต่อไม้' : `ไม้ชนะใหญ่เป็น ${num(c.payoff, 2)} เท่าของไม้แพ้`, c.payoff == null ? '' : c.payoff >= 1 ? 'up' : 'down', '', '⇅'),
+    card('ไม้ชนะ / ไม้แพ้ เฉลี่ย', `${c.avg_win == null ? '-' : '+' + num(c.avg_win, 1)} / ${c.avg_loss == null ? '-' : '−' + num(c.avg_loss, 1)}`, c.payoff == null ? 'หน่วยราคาต่อไม้' : `ไม้ชนะใหญ่เป็น ${num(c.payoff, 2)} เท่าของไม้แพ้`, c.payoff == null ? '' : c.payoff >= 1 ? 'up' : 'down', '', '⇅'),
     card('ไม่ตั้ง S/L', `${c.no_sl} / ${c.n}`, c.no_sl ? 'ทุกไม้ควรมี S/L ตั้งแต่เปิด' : 'ครบทุกไม้', c.no_sl ? 'down' : 'up', c.no_sl ? 'down' : '', '⛨'),
     card(`ถือเกิน ${p.max_hold_min} นาที`, `${c.over_hold} / ${c.n}`, `ไม้ชนะถือ ${mins(c.hold_win_s)} · ไม้แพ้ถือ ${mins(c.hold_loss_s)}`, c.over_hold ? 'down' : 'up', '', '⏱'),
   ].join(''));

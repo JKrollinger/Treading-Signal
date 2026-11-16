@@ -166,6 +166,45 @@ def watch(positions: list[dict], notify: bool = True) -> list[dict]:
     return out
 
 
+def m5_signals(bars: list[dict], sl_atr: float = 2.0, tp_r: float = 1.0) -> tuple[list[dict], dict | None]:
+    """Experimental scalp entries on 5-minute bars: fade a close outside the 2-sigma band in a flat market.
+
+    The best of the M5 rule sets in backtest_gold_scalp.py, and still only about +0.03R a trade after
+    costs, so it is drawn on the chart as a study and never offered as an order. Only completed bars
+    count (the last bar of ``bars`` is still forming). Returns (chart markers, the latest entry).
+    """
+    import numpy as np
+    import pandas as pd
+
+    if len(bars) < 80:
+        return [], None
+    c = pd.Series([b["c"] for b in bars], dtype=float)
+    h = pd.Series([b["h"] for b in bars], dtype=float)
+    l = pd.Series([b["l"] for b in bars], dtype=float)
+    prev = c.shift(1)
+    atr = pd.concat([h - l, (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1).ewm(alpha=1 / 14, adjust=False).mean()
+    mid, sd = c.rolling(20).mean(), c.rolling(20).std()
+    e50 = c.ewm(span=50, adjust=False).mean()
+    flat = (e50 - e50.shift(12)).abs() < 0.5 * atr
+    hour = np.array([(b["t"] // 3600) % 24 for b in bars])
+    session = (hour >= 7) & (hour < 20)                       # London to late New York, UTC
+    side = np.where(flat & session & (c < mid - 2 * sd), 1, np.where(flat & session & (c > mid + 2 * sd), -1, 0))
+    last_done = len(bars) - 2
+    markers: list[dict] = []
+    latest, last_i, last_side = None, -99, 0
+    for i in range(60, last_done + 1):
+        s = int(side[i])
+        if s == 0 or (s == last_side and i - last_i <= 3):
+            continue
+        last_i, last_side = i, s
+        markers.append({"t": bars[i]["t"], "kind": "scalp", "side": "buy" if s > 0 else "sell", "text": "S"})
+        risk = sl_atr * float(atr.iloc[i])
+        entry = float(c.iloc[i])
+        latest = {"t": bars[i]["t"], "side": "buy" if s > 0 else "sell", "entry": entry, "sl": entry - s * risk,
+                  "tp": entry + s * tp_r * risk, "age_bars": last_done - i, "recent": last_done - i <= 1}
+    return markers, latest
+
+
 def _tell_owner(text: str) -> None:
     try:
         from . import telegram_notify as tg

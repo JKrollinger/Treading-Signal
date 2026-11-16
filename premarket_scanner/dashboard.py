@@ -70,6 +70,8 @@ CLOSED_POLL_S = 10.0            # MT5 closed: look for it now and then (it is ne
 SYNC_EVERY_S = 20.0
 WATCH_EVERY_S = 5.0
 BARS_CACHE_S = 0.5
+CONFIRM_MAX_AGE_S = 30 * 60    # the web confirm button works this long after a signal
+CONFIRM_MAX_DRIFT_R = 0.5      # ... and only while price is within this many R of the signal's entry
 STALE_TICK_S = 180              # no tick for this long: the market is treated as closed
 MAX_BODY = 16 * 1024
 RESTART_DELAY_S = 30
@@ -96,6 +98,7 @@ class Hub:
         self.sl_cache: dict[tuple, float | None] = {}
         self.settings = _settings()
         self.risk: dict = {"enabled": config.RISK_GATE_ENABLED}
+        self.plan_cache: dict = {}
         self.last_risk = 0.0
         self.stop = threading.Event()
         login = journal.latest_login()
@@ -253,7 +256,8 @@ class Hub:
             uptrend = None if r["sma200"] is None else r["yesterday_close"] > r["sma200"]
             above = price > y_high
             at_high = price >= day_high * (1 - tol)
-            ready = bool(uptrend and above and at_high)
+            strong = True if config.ADX_MIN <= 0 else (None if r.get("adx") is None else r["adx"] >= config.ADX_MIN)
+            ready = bool(uptrend and strong and above and at_high)
             held = filters.check_new_signal(symbol, datetime.now(UTC)) if ready and fresh else None
             out.append({
                 "symbol": symbol, "name": display_name(symbol, True), "price": price, "digits": r.get("digits"), "fresh": fresh,
@@ -261,8 +265,89 @@ class Hub:
                 "held": held, "y_high": y_high, "y_close": r["yesterday_close"], "sma200": r["sma200"], "day_high": day_high,
                 "to_breakout": max(y_high - price, 0.0), "sma_gap_pct": (r["yesterday_close"] / r["sma200"] - 1) * 100 if r["sma200"] else None,
                 "last_tick": journal.server_to_utc(tick.time).isoformat(timespec="seconds") if tick is not None else None,
+                "atr": r.get("atr"), "adx": r.get("adx"), "adx_min": config.ADX_MIN, "strong": strong,
+                "plan": self._entry_plan(symbol, r, uptrend, strong), "signal": self._live_signal(symbol, price),
             })
         return out
+
+    def _entry_plan(self, symbol: str, r: dict, uptrend, strong) -> dict:
+        """The pending order (Buy Stop) the owner could place by hand to catch today's breakout."""
+        atr, y_high, price = r.get("atr"), r["yesterday_high"], r["price"]
+        if not uptrend:
+            return {"ok": False, "reason": "ราคาปิดเมื่อวานอยู่ใต้ SMA200 ระบบซื้อเฉพาะขาขึ้น จึงยังไม่ควรตั้งคำสั่งรอ"}
+        if not strong:
+            adx = "-" if r.get("adx") is None else f"{r['adx']:.1f}"
+            return {"ok": False, "reason": f"ADX รายวัน {adx} ต่ำกว่า {config.ADX_MIN:g} แนวโน้มยังไม่แรงพอ"}
+        if not atr:
+            return {"ok": False, "reason": "ยังไม่มีค่า ATR สำหรับคำนวณ S/L"}
+        if ea_bridge.halt_state().get("halted"):
+            return {"ok": False, "reason": "ปุ่มหยุดฉุกเฉินเปิดอยู่ ไม่ควรเปิดไม้ใหม่"}
+        if price >= y_high:
+            return {"ok": False, "reason": "ราคาผ่าน High เมื่อวานไปแล้ว คำสั่งรอใช้ไม่ได้แล้ว ให้รอสัญญาณของบอท"}
+        digits = int(r.get("digits") or 2)
+        entry = round(y_high + 0.02 * atr, digits)                # a little above the level, not on it
+        stop = round(entry - config.STOP_ATR_MULT * atr, digits)
+        key = (symbol, entry, stop)
+        cached = self.plan_cache.get(key)
+        if cached is None or time.monotonic() - cached[0] > 60:
+            self.plan_cache.clear()
+            cached = (time.monotonic(), ea_bridge.compute_lots(symbol, entry, stop))
+            self.plan_cache[key] = cached
+        sizing = cached[1] or {}
+        return {"ok": True, "type": "Buy Stop", "entry": entry, "stop": stop, "lots": sizing.get("lots"),
+                "risk_money": sizing.get("risk_money"), "currency": sizing.get("currency"), "risk_pct": config.EA_RISK_PCT,
+                "gold_filter": filters.applies_to(symbol)}
+
+    def _live_signal(self, symbol: str, price: float | None) -> dict | None:
+        """The Trend-join signal being followed for this symbol, and whether one click may still send it."""
+        from . import special_watch
+
+        rec = special_watch.load_state().get(symbol)
+        if not rec or rec.get("status") not in special_watch.TRACKING or "entry" not in rec:
+            return None
+        entry, stop = float(rec["entry"]), float(rec.get("initial_stop") or rec["stop"])
+        risk = float(rec.get("risk") or (entry - stop))
+        at = journal._iso_utc(rec.get("triggered_at"))
+        age = (datetime.now(UTC) - datetime.fromisoformat(at)).total_seconds() if at else None
+        tag = f"trendjoin {rec.get('date')}"
+        folder = self._ea_folder()
+        sent = folder is not None and any(q.get("symbol") == symbol and q.get("comment") == tag for q in ea_bridge.list_requests(folder))
+        note = None
+        if sent:
+            note = "ส่งคำขอของสัญญาณนี้ให้ EA ไปแล้ว"
+        elif ea_bridge.halt_state().get("halted"):
+            note = "ปุ่มหยุดฉุกเฉินเปิดอยู่ ส่งคำสั่งไม่ได้"
+        elif age is None or age > CONFIRM_MAX_AGE_S:
+            note = f"สัญญาณเกิดมานานกว่า {CONFIRM_MAX_AGE_S // 60} นาทีแล้ว ไม่ควรไล่ราคา"
+        elif price is not None and risk > 0 and abs(price - entry) > CONFIRM_MAX_DRIFT_R * risk:
+            note = f"ราคาห่างจากจุดเข้าเกิน {CONFIRM_MAX_DRIFT_R:g}R แล้ว ไม่ควรไล่ราคา"
+        return {"no": rec.get("no"), "entry": entry, "stop": stop, "risk": risk, "at": at, "age_s": age, "sent": sent,
+                "can": note is None, "note": note, "status": rec.get("status")}
+
+    def confirm(self, symbol: str) -> dict:
+        """The web page's confirm button: the same request the Telegram button writes, once per signal."""
+        from . import telegram_commands
+
+        with self.lock:
+            if symbol not in config.SPECIAL_WATCHLIST:
+                return {"ok": False, "text": "สัญลักษณ์นี้ไม่ได้อยู่ในรายการเฝ้าดู"}
+            row = next((w for w in self.state.get("watch", []) if w["symbol"] == symbol), None)
+            sig = self._live_signal(symbol, row.get("price") if row else None)
+            if sig is None:
+                return {"ok": False, "text": "ไม่มีสัญญาณที่ยังเปิดอยู่ จึงไม่ได้ส่งรายการ"}
+            if not sig["can"]:
+                return {"ok": False, "text": sig["note"]}
+            folder = self._ea_folder()
+            before = len(ea_bridge.list_requests(folder)) if folder is not None else 0
+            try:
+                text = telegram_commands.confirm_trade(symbol)
+            except (RuntimeError, OSError) as exc:
+                log.warning("web confirm for %s failed: %s", symbol, exc)
+                return {"ok": False, "text": f"ส่งไม่สำเร็จ: {exc}"}
+            after = len(ea_bridge.list_requests(folder)) if folder is not None else 0
+            self.last_watch = 0.0
+            log.info("web confirm for %s: %s", symbol, "request written" if after > before else "refused")
+            return {"ok": after > before, "text": text}
 
     # Requests --------------------------------------------------------------------------
     def _bars(self, symbol: str, tf: str, count: int) -> list | None:
@@ -306,8 +391,16 @@ class Hub:
             sma = self._sma_line(mt5, symbol) if tf == "D1" else []
             trades = [t for t in (self.doc or {"trades": {}})["trades"].values() if t["symbol"] == symbol]
             positions = [p for p in self.state.get("positions", []) if p["symbol"] == symbol]
+        marks = _markers(bars, trades, positions, journal.bot_signals(), symbol)
+        scalp = None
+        if tf == "M5":
+            try:
+                extra, scalp = scalp_coach.m5_signals(bars)
+                marks = sorted(marks + extra, key=lambda m: m["t"])
+            except Exception:  # noqa: BLE001 - a study must not take the chart down
+                log.exception("scalp study failed")
         return {"ok": True, "symbol": symbol, "tf": tf, "digits": digits, "name": display_name(symbol, True), "bars": bars,
-                "levels": levels, "sma": sma, "markers": _markers(bars, trades, positions, journal.bot_signals(), symbol)}
+                "levels": levels, "sma": sma, "markers": marks, "scalp": scalp}
 
     def _levels(self, mt5, symbol: str) -> dict:
         rates = journal._daily(mt5, symbol, self.daily_cache)
@@ -663,7 +756,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._post(path, length)
 
     def _post(self, path: str, length: int) -> None:
-        if path not in ("/api/note", "/api/halt") or length > MAX_BODY:
+        if path not in ("/api/note", "/api/halt", "/api/confirm") or length > MAX_BODY:
             self._json(400, {"ok": False})
             return
         try:
@@ -672,6 +765,11 @@ class _Handler(BaseHTTPRequestHandler):
                 if not isinstance(data.get("halt"), bool):
                     raise ValueError("halt must be true or false")
                 self._json(200, {"ok": True, "halt": self.hub.set_halt(data["halt"])})
+            elif path == "/api/confirm":
+                symbol = str(data["symbol"]).upper()
+                if not SYMBOL_RE.match(symbol):
+                    raise ValueError("bad symbol")
+                self._json(200, self.hub.confirm(symbol))
             else:
                 self._json(200, {"ok": self.hub.set_note(str(data["id"]), str(data.get("note") or ""))})
         except (ValueError, KeyError, AttributeError):
