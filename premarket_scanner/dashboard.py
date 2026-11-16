@@ -529,7 +529,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, kind: str, cache: bool = False, extra: dict | None = None) -> None:
         self.send_response(status)
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Referrer-Policy", "same-origin")     # no-referrer would turn Origin into "null" on our own POSTs
         for name, value in (extra or {}).items():
             self.send_header(name, value)
         self.send_header("Content-Type", kind)
