@@ -190,6 +190,8 @@ td.tick-down{animation:flashDown .9s ease-out}
 .strategy-tile:hover .strategy-emblem{transform:translateY(-3px) rotate(-2deg) scale(1.04)}
 .connection .status-led{margin-right:5px;vertical-align:1px}
 @media(max-width:1180px){.grid3,.grid2{grid-template-columns:1fr}}
+/* PC: the chart cards stretch to the tallest column, so let the chart fill the card instead of leaving a gap */
+@media(min-width:951px){.grid-top>.panel{display:flex;flex-direction:column}.grid-top>.panel>.chart-box{flex:1 1 300px;height:auto;min-height:300px}}
 @media(max-width:680px){.hbar{grid-template-columns:80px minmax(0,1fr) 120px}.chart-box{height:260px}.kv{grid-template-columns:1fr}.panelhead{flex-wrap:wrap}.statgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
